@@ -3,7 +3,6 @@ import Fluent
 struct CreateUser: AsyncMigration {
     func prepare(on database: any Database) async throws {
         try await database.schema("users")
-            // 關鍵：這行會告訴資料庫 id 是主鍵且會自動跳號
             .field("id", .int, .identifier(auto: true))
             .field("email", .string, .required)
             .field("password_hash", .string, .required)
@@ -11,6 +10,11 @@ struct CreateUser: AsyncMigration {
             .field("birth", .date)
             .field("gender", .int)
             .field("disease_stage", .string)
+            .field("pairing_code", .string)
+            .field("pairing_code_expires_at", .datetime)
+            .field("role", .int, .required)
+            // 🔥 新增這行：儲存當前合法登入的 Session ID
+            .field("active_session_id", .string)
             .unique(on: "email")
             .create()
     }

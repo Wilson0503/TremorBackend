@@ -13,7 +13,7 @@ public func configure(_ app: Application) async throws {
         hostname: Environment.get("DATABASE_HOST") ?? "localhost",
         port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:)) ?? SQLPostgresConfiguration.ianaPortNumber,
         username: Environment.get("DATABASE_USERNAME") ?? "postgres",
-        password: Environment.get("DATABASE_PASSWORD") ?? "861228",
+        password: Environment.get("DATABASE_PASSWORD") ?? "123",
         database: Environment.get("DATABASE_NAME") ?? "tremor_glove",
         tls: .disable)
     ), as: .psql)
@@ -34,7 +34,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateUser())
     app.migrations.add(CreateTremorData())
     app.migrations.add(CreateMedicationRecord())
-    app.jwt.signers.use(.hs256(key: "MI3C_nice_team"))
+    app.migrations.add(CreateDailyRecord())
+    app.migrations.add(CreateUserBond()) // 🔥 加上這行
+    app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET") ?? "fallback_temporary_key"))
     // register routes
     try routes(app)
 }
