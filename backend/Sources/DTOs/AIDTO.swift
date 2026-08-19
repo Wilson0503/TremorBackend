@@ -1,0 +1,100 @@
+import Vapor
+import Foundation
+
+// MARK: - 前端 App 互動用 DTO
+struct ChatRequestDTO: Content {
+    let message: String
+}
+
+struct ChatResponseDTO: Content {
+    let reply: String
+}
+
+struct ChatHistoryResponseDTO: Content {
+    let id: UUID?
+    let role: String
+    let content: String
+    let createdAt: Date?
+}
+
+// MARK: - 知識庫管理用 DTO
+struct AddKnowledgeDTO: Content {
+    let category: String
+    let content: String
+}
+
+struct UploadKnowledgeDTO: Content {
+    let category: String?
+    let file: File
+}
+
+struct BatchKnowledgeDTO: Content {
+    let category: String
+    let content: String
+}
+
+// MARK: - OpenAI 官方 API 串接 DTO (Chat Completions & Function Calling)
+struct OpenAIChatRequest: Content {
+    struct Message: Content {
+        var role: String
+        var content: String?
+        var tool_calls: [ToolCall]?
+        var tool_call_id: String?
+    }
+    
+    struct Tool: Content {
+        var type: String = "function"
+        var function: FunctionDetail
+    }
+    
+    struct FunctionDetail: Content {
+        var name: String
+        var description: String
+        var parameters: Schema
+    }
+    
+    struct Schema: Content {
+        var type: String = "object"
+        var properties: [String: String]? = [:]
+    }
+    
+    var model: String
+    var messages: [Message]
+    var tools: [Tool]?
+}
+
+struct OpenAIChatResponse: Content {
+    struct Choice: Content {
+        struct Message: Content {
+            var role: String?
+            var content: String?
+            var tool_calls: [ToolCall]?
+        }
+        var message: Message
+        var finish_reason: String
+    }
+    var choices: [Choice]
+}
+
+struct ToolCall: Content {
+    struct FunctionCall: Content {
+        var name: String
+        var arguments: String
+    }
+    var id: String
+    var type: String
+    var function: FunctionCall
+}
+
+// MARK: - OpenAI Embedding DTO
+struct OpenAIEmbeddingRequest: Content {
+    let input: String
+    var model: String = "text-embedding-3-small"
+}
+
+struct OpenAIEmbeddingResponse: Codable {
+    struct EmbeddingData: Codable {
+        let embedding: [Float]
+    }
+    let data: [EmbeddingData]
+}

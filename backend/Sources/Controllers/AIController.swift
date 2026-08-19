@@ -8,7 +8,7 @@ struct AIController: RouteCollection {
         let ai = routes.grouped("api", "ai")
         ai.post("chat", use: handleChat)
         ai.post("knowledge", use: addKnowledge) // 原本的單筆輸入
-        
+        ai.get("history", use: getChatHistory)
         // 新增這行：專門處理檔案上傳，並將檔案大小限制放寬到 10MB
         ai.on(.POST, "knowledge", "upload", body: .collect(maxSize: "10mb"), use: uploadKnowledge)
     }
@@ -21,9 +21,6 @@ struct AIController: RouteCollection {
         let userID = String(user.userID)
         
         // 2. 解析前端問題
-        struct ChatRequestDTO: Content {
-            let message: String
-        }
         let userRequest = try req.content.decode(ChatRequestDTO.self)
         
         let numericUserID = user.userID
@@ -296,11 +293,6 @@ struct AIController: RouteCollection {
     // MARK: - API: 新增知識到向量資料庫 (Knowledge Ingestion)
     @Sendable
     func addKnowledge(req: Request) async throws -> HTTPStatus {
-        struct AddKnowledgeDTO: Content {
-            let category: String
-            let content: String
-        }
-        
         let input = try req.content.decode(AddKnowledgeDTO.self)
         
         let vector = try await generateEmbedding(for: input.content, req: req)
@@ -318,10 +310,6 @@ struct AIController: RouteCollection {
     @Sendable
     func uploadKnowledge(req: Request) async throws -> HTTPStatus {
         // 1. 定義接收上傳檔案的資料結構
-        struct UploadKnowledgeDTO: Content {
-            let category: String? // txt 檔案用的分類
-            let file: File        // Vapor 內建的檔案型別
-        }
         
         let input = try req.content.decode(UploadKnowledgeDTO.self)
         let fileName = input.file.filename.lowercased()
@@ -352,10 +340,6 @@ struct AIController: RouteCollection {
             // ==========================================
         } else if fileName.hasSuffix(".json") {
             // 預期上傳的 JSON 是一個陣列：[{"category": "...", "content": "..."}]
-            struct BatchKnowledgeDTO: Content {
-                let category: String
-                let content: String
-            }
             
             let data = Data(buffer: fileBuffer)
             let batch: [BatchKnowledgeDTO]
@@ -419,80 +403,26 @@ struct AIController: RouteCollection {
         
         return vector
     }
-}
-
-// =-=-=-=-=-= DTO 模型 (共用) =-=-=-=-=-=
-struct ChatResponseDTO: Content {
-    let reply: String
-}
-
-// =-=-=-=-=-= OpenAI Chat DTO 模型 (Function Calling 升級版) =-=-=-=-=-=
-
-struct OpenAIChatRequest: Content {
-    struct Message: Content {
-        var role: String
-        var content: String? // 💡 改為可選 (Optional)，因為 AI 呼叫工具時可能不會講話
-        var tool_calls: [ToolCall]? // AI 決定呼叫工具時，會把工具清單放在這裡
-        var tool_call_id: String? // 當我們把資料庫結果回傳給 AI 時，用來對應的 ID
-    }
-    
-    // --- 🧰 定義工具箱的格式 ---
-    struct Tool: Content {
-        var type: String = "function"
-        var function: FunctionDetail
-    }
-    
-    struct FunctionDetail: Content {
-        var name: String
-        var description: String
-        var parameters: Schema
-    }
-    
-    struct Schema: Content {
-        var type: String = "object"
-        // 💡 由於我們是從 JWT Token 直接抓 UserID，所以 AI 不需要提供任何參數
-        var properties: [String: String]? = [:]
-    }
-    // ---------------------------
-    
-    var model: String
-    var messages: [Message]
-    var tools: [Tool]? // 讓 AI 知道它手邊有哪些工具可以用
-}
-
-struct OpenAIChatResponse: Content {
-    struct Choice: Content {
-        struct Message: Content {
-            var role: String?
-            var content: String?
-            var tool_calls: [ToolCall]?
+    // MARK: - API: 取得使用者的歷史對話紀錄 (給前端 App 載入聊天室畫面用)
+    @Sendable
+    func getChatHistory(req: Request) async throws -> [ChatHistoryResponseDTO] {
+        let user = try req.auth.require(UserPayload.self)
+        let userID = String(user.userID)
+        
+        // 撈取該使用者的歷史對話（依時間由舊到新排序，方便前端由上往下渲染）
+        let history = try await ChatHistory.query(on: req.db)
+            .filter(\.$userID == userID)
+            .sort(\.$createdAt, .ascending)
+            .all()
+        
+        return history.map { chat in
+            ChatHistoryResponseDTO(
+                id: chat.id,
+                role: chat.role,
+                content: chat.content,
+                createdAt: chat.createdAt
+            )
         }
-        var message: Message
-        var finish_reason: String // 💡 關鍵：我們靠這個判斷 AI 是想聊天 (stop)，還是想用工具 (tool_calls)
     }
-    var choices: [Choice]
 }
 
-// 供 Request 與 Response 共用的工具呼叫結構
-struct ToolCall: Content {
-    struct FunctionCall: Content {
-        var name: String
-        var arguments: String
-    }
-    var id: String
-    var type: String
-    var function: FunctionCall
-}
-
-// =-=-=-=-=-= OpenAI Embedding DTO 模型 =-=-=-=-=-=
-struct OpenAIEmbeddingRequest: Content {
-    let input: String
-    var model: String = "text-embedding-3-small" // 已將 let 改為 var 消除警告
-}
-
-struct OpenAIEmbeddingResponse: Codable {
-    struct EmbeddingData: Codable {
-        let embedding: [Float]
-    }
-    let data: [EmbeddingData]
-}
