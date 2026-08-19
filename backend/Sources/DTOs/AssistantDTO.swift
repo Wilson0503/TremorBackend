@@ -8,6 +8,7 @@ struct DailyRequestDTO: Content {
     let colorHex: String
     let sender: String
     let moodName: String?
+    let isCaregiverOnly: Bool?
 }
 
 struct DailyResponseDTO: Content {
@@ -17,4 +18,5 @@ struct DailyResponseDTO: Content {
     let colorHex: String
     let sender: String
     let moodName: String?
+    let isCaregiverOnly: Bool
 }

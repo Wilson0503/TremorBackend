@@ -17,8 +17,8 @@ struct UserController: RouteCollection {
         
         protected.post("bonds", "generate-code", use: generatePairingCode)
         protected.post("bonds", "link", use: linkPatient)
-        protected.get("bonds", "partner", use: getMyPartner)
-    }
+        protected.get("bonds", "caregivers", use: getCaregivers)
+        protected.get("bonds", "patient", use: getPatient)    }
     
     // MARK: - 註冊邏輯
     @Sendable
@@ -185,55 +185,62 @@ struct UserController: RouteCollection {
         )
     }
     
-    // MARK: - 🔥 實作三：獲取目前綁定的對象資訊（雙向通用）
+    // MARK: - API: 取得患者已綁定的照護者列表 (適用身分：病患端)
     @Sendable
-    func getMyPartner(req: Request) async throws -> LinkedPartnerResponseDTO {
+    func getCaregivers(req: Request) async throws -> [CaregiverListResponseDTO] {
         let payload = try req.auth.require(UserPayload.self)
         
-        // 1. 查出目前發出請求的使用者，確認他的身分角色
-        guard let currentUser = try await User.find(payload.userID, on: req.db) else {
-            throw Abort(.notFound, reason: "找不到您的帳號")
+        // 安全檢查：確認發送請求的是病患 (role == 0)
+        guard let user = try await User.find(payload.userID, on: req.db), user.role == 0 else {
+            throw Abort(.forbidden, reason: "只有被照護者可以查詢照護者列表")
         }
         
-        let bond: UserBond?
-        let partnerID: Int
+        // 撈出所有指向該病患的綁定紀錄
+        let bonds = try await UserBond.query(on: req.db)
+            .filter(\.$patientID == payload.userID)
+            .all()
         
-        // 2. 根據身分動態查詢 UserBond
-        if currentUser.role == 1 {
-            // 若為照護者，找自己發起的綁定，目標是 patient
-            bond = try await UserBond.query(on: req.db)
-                .filter(\.$caregiverID == payload.userID)
-                .first()
-            
-            guard let foundBond = bond else {
-                throw Abort(.notFound, reason: "目前尚未綁定任何被照護者")
+        var caregiversList: [CaregiverListResponseDTO] = []
+        
+        // 查出對應的照護者詳細資料
+        for bond in bonds {
+            if let caregiver = try await User.find(bond.caregiverID, on: req.db) {
+                caregiversList.append(CaregiverListResponseDTO(
+                    partnerName: caregiver.name ?? "未具名家屬",
+                    partnerEmail: caregiver.email
+                ))
             }
-            partnerID = foundBond.patientID
-            
-        } else {
-            // 若為被照護者 (患者)，找指向自己的綁定，目標是 caregiver
-            bond = try await UserBond.query(on: req.db)
-                .filter(\.$patientID == payload.userID)
-                .first()
-            
-            guard let foundBond = bond else {
-                throw Abort(.notFound, reason: "目前尚未被任何照護者綁定")
-            }
-            partnerID = foundBond.caregiverID
         }
         
-        // 3. 查出對方的詳細資訊
-        guard let partner = try await User.find(partnerID, on: req.db) else {
-            throw Abort(.notFound, reason: "關聯的帳號已不存在")
+        // 回傳陣列格式 (完全符合前端規格)
+        return caregiversList
+    }
+    
+    // MARK: - API: 取得照護者綁定的患者資訊 (適用身分：照護者端)
+    @Sendable
+    func getPatient(req: Request) async throws -> SinglePatientResponseDTO {
+        let payload = try req.auth.require(UserPayload.self)
+        
+        // 安全檢查：確認發送請求的是照護者 (role == 1)
+        guard let user = try await User.find(payload.userID, on: req.db), user.role == 1 else {
+            throw Abort(.forbidden, reason: "只有照護者可以查詢病患資訊")
         }
         
-        // 4. 回傳通用資料
-        return LinkedPartnerResponseDTO(
-            bondID: bond!.id!,
-            partnerID: partner.id!,
-            partnerName: partner.name ?? "未具名使用者",
-            partnerEmail: partner.email,
-            partnerRole: partner.role
+        // 照前端規格，目前照護者端維持單一患者，所以用 .first()
+        guard let bond = try await UserBond.query(on: req.db)
+            .filter(\.$caregiverID == payload.userID)
+            .first() else {
+            throw Abort(.notFound, reason: "尚未綁定任何病患")
+        }
+        
+        guard let patient = try await User.find(bond.patientID, on: req.db) else {
+            throw Abort(.notFound, reason: "找不到該病患資訊")
+        }
+        
+        // 回傳單一物件格式 (完全符合前端規格)
+        return SinglePatientResponseDTO(
+            partnerName: patient.name ?? "未具名病患",
+            partnerEmail: patient.email
         )
     }
 }

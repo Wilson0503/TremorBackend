@@ -36,3 +36,14 @@ struct LinkedPartnerResponseDTO: Content {
     let partnerEmail: String
     let partnerRole: Int // 0: 被照護者, 1: 照護者
 }
+// 適用於：GET /users/bonds/caregivers (病患端獲取照護者列表)
+struct CaregiverListResponseDTO: Content {
+    let partnerName: String
+    let partnerEmail: String
+}
+
+// 適用於：GET /users/bonds/patient (照護者端獲取單一病患資訊)
+struct SinglePatientResponseDTO: Content {
+    let partnerName: String
+    let partnerEmail: String
+}

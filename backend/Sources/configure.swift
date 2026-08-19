@@ -32,10 +32,16 @@ public func configure(_ app: Application) async throws {
     ContentConfiguration.global.use(decoder: decoder, for: .json)
     
     app.migrations.add(CreateUser())
-    app.migrations.add(CreateTremorData())
+    app.migrations.add(CreateNewTremorTables())
     app.migrations.add(CreateMedicationRecord())
     app.migrations.add(CreateDailyRecord())
-    app.migrations.add(CreateUserBond()) // 🔥 加上這行
+    app.migrations.add(CreateUserBond())
+    app.migrations.add(CreateKnowledgeBase())
+    app.migrations.add(CreateChatHistory())
+    app.migrations.add(UpdateDailyRecordAddCaregiverOnly())
+    app.migrations.add(CreateSymptomRecord())
+    app.migrations.add(CreateMedicationPlan())
+    app.lifecycle.use(ChatCleanupTask())
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET") ?? "fallback_temporary_key"))
     // register routes
     try routes(app)

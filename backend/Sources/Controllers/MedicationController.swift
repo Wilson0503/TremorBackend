@@ -5,7 +5,10 @@ struct MedicationController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         // 同樣放在受 JWT 保護的群組下
         let meds = routes.grouped("medication")
-        meds.post("add", use: addRecord)
+        
+        // 🚀 關鍵修改：因為加入了貼布照片，將 body 接收大小放寬到 50MB (可依需求調整)
+        meds.on(.POST, "add", body: .collect(maxSize: "50mb"), use: addRecord)
+        
         meds.get("search", use: getRecordsByDate)
         // 接口：DELETE /medication/:recordID
         meds.delete(":recordID", use: deleteRecord)
@@ -43,19 +46,29 @@ struct MedicationController: RouteCollection {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         
+        // 👇 擴充接收資料的結構
         struct AddMedRequest: Content {
             let date: Date
             let name: String
             let dose: String
+            let medType: String
+            let patchRegion: String?
+            let skinCondition: String?
+            let skinImageDataList: [Data]? // 前端可能為空
         }
         
         let data = try req.content.decode(AddMedRequest.self, using: decoder)
         
+        // 👇 把新欄位帶入 Model 進行儲存
         let record = MedicationRecord(
-            userID: targetUserID, // 🔥 存入正確的病患 ID，而非發送者 ID
+            userID: targetUserID,
             date: data.date,
             name: data.name,
-            dose: data.dose
+            dose: data.dose,
+            medType: data.medType,
+            patchRegion: data.patchRegion,
+            skinCondition: data.skinCondition,
+            skinImageDataList: data.skinImageDataList ?? []
         )
         
         try await record.save(on: req.db)

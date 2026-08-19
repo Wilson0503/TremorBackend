@@ -45,6 +45,7 @@ struct DailyController: RouteCollection {
             existing.colorHex = data.colorHex
             existing.sender = data.sender
             existing.moodName = data.moodName
+            existing.isCaregiverOnly = data.isCaregiverOnly ?? false
             try await existing.update(on: req.db)
         } else {
             // 沒有舊紀錄，直接建立新紀錄
@@ -55,7 +56,8 @@ struct DailyController: RouteCollection {
                 date: data.date,
                 colorHex: data.colorHex,
                 sender: data.sender,
-                moodName: data.moodName
+                moodName: data.moodName,
+                isCaregiverOnly: data.isCaregiverOnly ?? false
             )
             try await newRecord.create(on: req.db)
         }
@@ -66,15 +68,22 @@ struct DailyController: RouteCollection {
     @Sendable
     func getAllRecords(req: Request) async throws -> Response {
         let payload = try req.auth.require(UserPayload.self)
-        
-        // 動態判定要抓哪一個病患的留言板
         let targetPatientID = try await getTargetPatientID(req: req, currentUserID: payload.userID)
         
-        // 撈出該病患看板下的所有紀錄，按時間倒序排列（最新留言在最上面）
-        let records = try await DailyRecord.query(on: req.db)
-            .filter(\.$userID == targetPatientID)
-            .sort(\.$date, .descending)
-            .all()
+        // 🔥 先查出目前登入的使用者是病患還是照護者
+        guard let currentUser = try await User.find(payload.userID, on: req.db) else {
+            throw Abort(.unauthorized)
+        }
+        
+        // 建立查詢 Query
+        let query = DailyRecord.query(on: req.db).filter(\.$userID == targetPatientID)
+        
+        // 🔥 如果是病患 (role == 0)，他「不能」看到照護者專屬的留言
+        if currentUser.role == 0 {
+            query.filter(\.$isCaregiverOnly == false)
+        }
+        
+        let records = try await query.sort(\.$date, .descending).all()
         
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

@@ -13,7 +13,6 @@ struct CreateUser: AsyncMigration {
             .field("pairing_code", .string)
             .field("pairing_code_expires_at", .datetime)
             .field("role", .int, .required)
-            // 🔥 新增這行：儲存當前合法登入的 Session ID
             .field("active_session_id", .string)
             .unique(on: "email")
             .create()
