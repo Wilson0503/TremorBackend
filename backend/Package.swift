@@ -26,6 +26,7 @@ let package = Package(
                 // --- 2. 在這裡加入了 JWT 模組的引用 ---
                 .product(name: "JWT", package: "jwt"),
             ],
+            path: "Sources",
             swiftSettings: swiftSettings
         ),
         .testTarget(

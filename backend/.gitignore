@@ -5,8 +5,10 @@ xcuserdata
 DerivedData/
 .DS_Store
 db.sqlite
-.swiftpm
 .env
 .env.*
 !.env.example
 default.profraw
+.swiftpm
+ssh-key-2026-04-06.key.pub
+ssh-key-2026-04-06.key
