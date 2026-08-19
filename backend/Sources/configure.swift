@@ -6,8 +6,8 @@ import JWT
 
 // configures your application
 public func configure(_ app: Application) async throws {
-    // uncomment to serve files from /Public folder
-    // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+    // 🎯 強制全域使用 Vapor 原生格式輸出 INFO 級別日誌 (包含 API 請求與遷移資訊)
+    app.logger.logLevel = .info
     
     app.databases.use(DatabaseConfigurationFactory.postgres(configuration: .init(
         hostname: Environment.get("DATABASE_HOST") ?? "localhost",
@@ -22,12 +22,11 @@ public func configure(_ app: Application) async throws {
     let decoder = JSONDecoder()
     
     let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy-MM-dd" // 設定與你資料庫一致的格式
+    formatter.dateFormat = "yyyy-MM-dd"
     
     encoder.dateEncodingStrategy = .formatted(formatter)
     decoder.dateDecodingStrategy = .formatted(formatter)
     
-    // 告訴 Vapor 全域使用這套編解碼器
     ContentConfiguration.global.use(encoder: encoder, for: .json)
     ContentConfiguration.global.use(decoder: decoder, for: .json)
     
@@ -43,8 +42,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateMedicationPlan())
     app.lifecycle.use(ChatCleanupTask())
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET") ?? "fallback_temporary_key"))
+    
     // register routes
     try routes(app)
+    
     app.logger.info("🚀 正在嘗試自動執行資料庫遷移...")
     try await app.autoMigrate()
     app.logger.info("✅ 資料庫遷移成功完成！")
