@@ -45,4 +45,7 @@ public func configure(_ app: Application) async throws {
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET") ?? "fallback_temporary_key"))
     // register routes
     try routes(app)
+    app.logger.info("🚀 正在嘗試自動執行資料庫遷移...")
+    try await app.autoMigrate()
+    app.logger.info("✅ 資料庫遷移成功完成！")
 }

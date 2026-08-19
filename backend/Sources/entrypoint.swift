@@ -20,9 +20,6 @@ enum Entrypoint {
         
         do {
             try await configure(app)
-            app.logger.info("正在檢查並執行資料庫自動遷移 (Migration)...")
-            try await app.autoMigrate()
-            app.logger.info("資料庫自動遷移完成！")
             try await app.execute()
         } catch {
             app.logger.report(error: error)
