@@ -10,7 +10,7 @@ enum Entrypoint {
         try LoggingSystem.bootstrap(from: &env)
         
         let app = try await Application.make(env)
-
+        
         // This attempts to install NIO as the Swift Concurrency global executor.
         // You can enable it if you'd like to reduce the amount of context switching between NIO and Swift Concurrency.
         // Note: this has caused issues with some libraries that use `.wait()` and cleanly shutting down.
@@ -20,6 +20,9 @@ enum Entrypoint {
         
         do {
             try await configure(app)
+            app.logger.info("正在檢查並執行資料庫自動遷移 (Migration)...")
+            try await app.autoMigrate()
+            app.logger.info("資料庫自動遷移完成！")
             try await app.execute()
         } catch {
             app.logger.report(error: error)
