@@ -7,7 +7,13 @@ import NIOPosix
 enum Entrypoint {
     static func main() async throws {
         var env = try Environment.detect()
-        try LoggingSystem.bootstrap(from: &env)
+        
+        // 🎯 透過原生 LoggingSystem 自訂日誌等級
+        LoggingSystem.bootstrap { label in
+            var handler = StreamLogHandler.standardOutput(label: label)
+            handler.logLevel = .info
+            return handler
+        }
         
         let app = try await Application.make(env)
         
