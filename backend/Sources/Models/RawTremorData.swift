@@ -8,26 +8,17 @@ final class RawTremorData: Model, Content, @unchecked Sendable {
     @ID(custom: .id) var id: Int?
     @Field(key: "user_id") var userID: Int
     @Field(key: "session_id") var sessionId: String
-    @Field(key: "sequence") var sequence: Int              // 👈 修改為 Int
-    @Field(key: "sample_tick_ms") var sampleTickMs: Int    // 👈 修改為 Int
-    @Field(key: "gyro_x_dps") var gyroXDps: Double
-    @Field(key: "gyro_y_dps") var gyroYDps: Double
-    @Field(key: "gyro_z_dps") var gyroZDps: Double
-    @Field(key: "sensor_valid") var sensorValid: Int       // 👈 修改為 Int
-    @Field(key: "motor_enabled") var motorEnabled: Int     // 👈 修改為 Int
+    @Field(key: "sample_count") var sampleCount: Int          // 記錄此包點數 (固定 400)
+    @Field(key: "compressed_data") var compressedData: Data   // 壓縮後的二進位數據
     @Timestamp(key: "created_at", on: .create) var createdAt: Date?
 
     init() { }
 
-    init(userID: Int, sessionId: String, sequence: Int, sampleTickMs: Int, gyroXDps: Double, gyroYDps: Double, gyroZDps: Double, sensorValid: Int, motorEnabled: Int) {
+    init(id: Int? = nil, userID: Int, sessionId: String, sampleCount: Int, compressedData: Data) {
+        self.id = id
         self.userID = userID
         self.sessionId = sessionId
-        self.sequence = sequence
-        self.sampleTickMs = sampleTickMs
-        self.gyroXDps = gyroXDps
-        self.gyroYDps = gyroYDps
-        self.gyroZDps = gyroZDps
-        self.sensorValid = sensorValid
-        self.motorEnabled = motorEnabled
+        self.sampleCount = sampleCount
+        self.compressedData = compressedData
     }
 }
