@@ -11,6 +11,7 @@ struct SymptomController: RouteCollection {
         
         symptoms.get("search", use: getRecordsByDate)
         symptoms.delete(":recordID", use: deleteRecord)
+        symptoms.on(.PUT, ":recordID", body: .collect(maxSize: "50mb"), use: updateRecord)
     }
     
     // MARK: - 🔒 核心輔助函式：動態判斷要操作哪位病患的資料
@@ -120,5 +121,42 @@ struct SymptomController: RouteCollection {
         
         try await record.delete(on: req.db)
         return .noContent
+    }
+    // MARK: - 🌟 4. 編輯表徵紀錄
+    @Sendable
+    func updateRecord(req: Request) async throws -> HTTPStatus {
+        let payload = try req.auth.require(UserPayload.self)
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
+        
+        guard let recordID = req.parameters.get("recordID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "無效的紀錄 ID")
+        }
+        
+        guard let record = try await SymptomRecord.query(on: req.db)
+            .filter(\.$id == recordID)
+            .filter(\.$userID == targetUserID)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到該筆表徵紀錄或無權限修改")
+        }
+        
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        struct UpdateSymptomRequest: Content {
+            let date: Date?
+            let symptomNote: String?
+            let mediaDataList: [Data]?
+            let isVideo: Bool?
+        }
+        
+        let data = try req.content.decode(UpdateSymptomRequest.self, using: decoder)
+        
+        if let date = data.date { record.date = date }
+        if let note = data.symptomNote { record.symptomNote = note }
+        if let media = data.mediaDataList { record.mediaDataList = media }
+        if let isVideo = data.isVideo { record.isVideo = isVideo }
+        
+        try await record.update(on: req.db)
+        return .ok
     }
 }

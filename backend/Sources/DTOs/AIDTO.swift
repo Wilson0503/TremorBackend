@@ -1,7 +1,7 @@
 import Vapor
 import Foundation
 
-// MARK: - 前端 App 互動用 DTO
+// MARK: - 1. 前端 App 互動用 DTO
 struct ChatRequestDTO: Content {
     let message: String
 }
@@ -17,7 +17,7 @@ struct ChatHistoryResponseDTO: Content {
     let createdAt: Date?
 }
 
-// MARK: - 知識庫管理用 DTO
+// MARK: - 2. 知識庫管理用 DTO
 struct AddKnowledgeDTO: Content {
     let category: String
     let content: String
@@ -33,34 +33,40 @@ struct BatchKnowledgeDTO: Content {
     let content: String
 }
 
-// MARK: - OpenAI 官方 API 串接 DTO (Chat Completions & Function Calling)
+// MARK: - 3. OpenAI Chat Completions & Function Calling DTO
 struct OpenAIChatRequest: Content {
+    var model: String
+    var messages: [Message]
+    var tools: [Tool]?
+
     struct Message: Content {
         var role: String
         var content: String?
         var tool_calls: [ToolCall]?
         var tool_call_id: String?
     }
-    
+
     struct Tool: Content {
         var type: String = "function"
-        var function: FunctionDetail
+        var function: FunctionDefinition
+
+        struct FunctionDefinition: Content {
+            var name: String
+            var description: String
+            var parameters: ParameterSchema
+
+            struct ParameterSchema: Content {
+                var type: String = "object"
+                var properties: [String: PropertyItem] = [:]
+                var required: [String]?
+
+                struct PropertyItem: Content {
+                    var type: String = "string"
+                    var description: String
+                }
+            }
+        }
     }
-    
-    struct FunctionDetail: Content {
-        var name: String
-        var description: String
-        var parameters: Schema
-    }
-    
-    struct Schema: Content {
-        var type: String = "object"
-        var properties: [String: String]? = [:]
-    }
-    
-    var model: String
-    var messages: [Message]
-    var tools: [Tool]?
 }
 
 struct OpenAIChatResponse: Content {
@@ -71,7 +77,7 @@ struct OpenAIChatResponse: Content {
             var tool_calls: [ToolCall]?
         }
         var message: Message
-        var finish_reason: String
+        var finish_reason: String?
     }
     var choices: [Choice]
 }
@@ -86,7 +92,7 @@ struct ToolCall: Content {
     var function: FunctionCall
 }
 
-// MARK: - OpenAI Embedding DTO
+// MARK: - 4. OpenAI Embedding DTO
 struct OpenAIEmbeddingRequest: Content {
     let input: String
     var model: String = "text-embedding-3-small"

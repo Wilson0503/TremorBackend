@@ -18,7 +18,10 @@ struct UserController: RouteCollection {
         protected.post("bonds", "generate-code", use: generatePairingCode)
         protected.post("bonds", "link", use: linkPatient)
         protected.get("bonds", "caregivers", use: getCaregivers)
-        protected.get("bonds", "patient", use: getPatient)    }
+        protected.get("bonds", "patient", use: getPatient)
+        protected.put("profile", use: updateProfile)
+        protected.delete("bonds", "unlink", use: unlinkBond)
+    }
     
     // MARK: - 註冊邏輯
     @Sendable
@@ -190,32 +193,29 @@ struct UserController: RouteCollection {
     func getCaregivers(req: Request) async throws -> [CaregiverListResponseDTO] {
         let payload = try req.auth.require(UserPayload.self)
         
-        // 安全檢查：確認發送請求的是病患 (role == 0)
         guard let user = try await User.find(payload.userID, on: req.db), user.role == 0 else {
             throw Abort(.forbidden, reason: "只有被照護者可以查詢照護者列表")
         }
         
-        // 撈出所有指向該病患的綁定紀錄
         let bonds = try await UserBond.query(on: req.db)
             .filter(\.$patientID == payload.userID)
             .all()
         
         var caregiversList: [CaregiverListResponseDTO] = []
         
-        // 查出對應的照護者詳細資料
         for bond in bonds {
             if let caregiver = try await User.find(bond.caregiverID, on: req.db) {
                 caregiversList.append(CaregiverListResponseDTO(
+                    bondID: bond.id!,
+                    caregiverID: caregiver.id!,
                     partnerName: caregiver.name ?? "未具名家屬",
                     partnerEmail: caregiver.email
                 ))
             }
         }
         
-        // 回傳陣列格式 (完全符合前端規格)
         return caregiversList
     }
-    
     // MARK: - API: 取得照護者綁定的患者資訊 (適用身分：照護者端)
     @Sendable
     func getPatient(req: Request) async throws -> SinglePatientResponseDTO {
@@ -242,5 +242,72 @@ struct UserController: RouteCollection {
             partnerName: patient.name ?? "未具名病患",
             partnerEmail: patient.email
         )
+    }
+    // MARK: - 🌟 1. 更新個人基本資料
+    @Sendable
+    func updateProfile(req: Request) async throws -> UserResponse {
+        let payload = try req.auth.require(UserPayload.self)
+        guard let user = try await User.find(payload.userID, on: req.db) else {
+            throw Abort(.notFound, reason: "找不到該使用者帳號")
+        }
+        
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try req.content.decode(UpdateProfileRequestDTO.self, using: decoder)
+        
+        if let name = data.name { user.name = name }
+        if let birth = data.birth { user.birth = birth }
+        if let gender = data.gender { user.gender = gender }
+        if let stage = data.diseaseStage { user.diseaseStage = stage }
+        
+        try await user.update(on: req.db)
+        return user.toResponse()
+    }
+    
+    // MARK: - 🌟 解除照護者與被照護者連結 (支援單一照護者精準解綁)
+    @Sendable
+    func unlinkBond(req: Request) async throws -> HTTPStatus {
+        let payload = try req.auth.require(UserPayload.self)
+        guard let currentUser = try await User.find(payload.userID, on: req.db) else {
+            throw Abort(.notFound, reason: "找不到該使用者帳號")
+        }
+        
+        // 1. 若發起者是照護者 (role == 1)：直接解除自己綁定的單一病患
+        if currentUser.role == 1 {
+            guard let bond = try await UserBond.query(on: req.db)
+                .filter(\.$caregiverID == payload.userID)
+                .first() else {
+                throw Abort(.notFound, reason: "目前尚未綁定任何病患")
+            }
+            try await bond.delete(on: req.db)
+            return .noContent
+        }
+        
+        // 2. 若發起者是病患 (role == 0)：解析欲解除的目標照護者 (相容 Body 或 Query)
+        let bodyData = try? req.content.decode(UnlinkBondRequestDTO.self)
+        let targetEmail = bodyData?.caregiverEmail ?? req.query[String.self, at: "caregiverEmail"]
+        let targetCaregiverID = bodyData?.caregiverID ?? req.query[Int.self, at: "caregiverID"]
+        
+        let bondQuery = UserBond.query(on: req.db).filter(\.$patientID == payload.userID)
+        
+        if let caregiverID = targetCaregiverID {
+            bondQuery.filter(\.$caregiverID == caregiverID)
+        } else if let email = targetEmail {
+            guard let targetCaregiver = try await User.query(on: req.db)
+                .filter(\.$email == email)
+                .first() else {
+                throw Abort(.notFound, reason: "找不到該照護者帳號")
+            }
+            bondQuery.filter(\.$caregiverID == targetCaregiver.id!)
+        } else {
+            throw Abort(.badRequest, reason: "病患端解除綁定時，請指定要解除的照護者 Email 或 ID")
+        }
+        
+        guard let bond = try await bondQuery.first() else {
+            throw Abort(.notFound, reason: "找不到與該照護者的綁定紀錄")
+        }
+        
+        try await bond.delete(on: req.db)
+        return .noContent
     }
 }

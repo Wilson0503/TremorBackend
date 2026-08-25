@@ -12,6 +12,7 @@ struct MedicationController: RouteCollection {
         meds.get("search", use: getRecordsByDate)
         // 接口：DELETE /medication/:recordID
         meds.delete(":recordID", use: deleteRecord)
+        meds.on(.PUT, ":recordID", body: .collect(maxSize: "50mb"), use: updateRecord)
     }
     
     // MARK: - 🔒 核心輔助函式：動態判斷要操作哪位病患的資料
@@ -143,5 +144,48 @@ struct MedicationController: RouteCollection {
         try await record.delete(on: req.db)
         
         return .noContent
+    }
+    // MARK: - 🌟 4. 編輯用藥紀錄
+    @Sendable
+    func updateRecord(req: Request) async throws -> HTTPStatus {
+        let payload = try req.auth.require(UserPayload.self)
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
+        
+        guard let recordID = req.parameters.get("recordID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "無效的紀錄 ID")
+        }
+        
+        guard let record = try await MedicationRecord.query(on: req.db)
+            .filter(\.$id == recordID)
+            .filter(\.$userID == targetUserID)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到該筆用藥紀錄或無權限修改")
+        }
+        
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        struct UpdateMedRequest: Content {
+            let date: Date?
+            let name: String?
+            let dose: String?
+            let medType: String?
+            let patchRegion: String?
+            let skinCondition: String?
+            let skinImageDataList: [Data]?
+        }
+        
+        let data = try req.content.decode(UpdateMedRequest.self, using: decoder)
+        
+        if let date = data.date { record.date = date }
+        if let name = data.name { record.name = name }
+        if let dose = data.dose { record.dose = dose }
+        if let medType = data.medType { record.medType = medType }
+        if let patchRegion = data.patchRegion { record.patchRegion = patchRegion }
+        if let skinCondition = data.skinCondition { record.skinCondition = skinCondition }
+        if let images = data.skinImageDataList { record.skinImageDataList = images }
+        
+        try await record.update(on: req.db)
+        return .ok
     }
 }

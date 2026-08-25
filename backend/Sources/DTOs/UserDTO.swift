@@ -10,7 +10,7 @@ struct UserResponse: Content {
     let diseaseStage: String?
     let pairingCode: String?
     let pairingCodeExpiresAt: Date?
-    let role: Int // 🔥 新增這行，讓前端 SwiftUI 知道目前登入者的身份
+    let role: Int
 }
 
 struct LoginResponse: Content {
@@ -28,22 +28,36 @@ struct LinkPatientRequestDTO: Content {
     let pairingCode: String
 }
 
-// 🔥 將原本的 LinkedPatientResponseDTO 改為 LinkedPartnerResponseDTO (通用夥伴資訊)
 struct LinkedPartnerResponseDTO: Content {
     let bondID: Int
     let partnerID: Int
     let partnerName: String
     let partnerEmail: String
-    let partnerRole: Int // 0: 被照護者, 1: 照護者
+    let partnerRole: Int
 }
-// 適用於：GET /users/bonds/caregivers (病患端獲取照護者列表)
+
+// 🌟 修改：補上 bondID 與 caregiverID，方便前端 App 辨識與操作
 struct CaregiverListResponseDTO: Content {
+    let bondID: Int
+    let caregiverID: Int
     let partnerName: String
     let partnerEmail: String
 }
 
-// 適用於：GET /users/bonds/patient (照護者端獲取單一病患資訊)
 struct SinglePatientResponseDTO: Content {
     let partnerName: String
     let partnerEmail: String
+}
+
+struct UpdateProfileRequestDTO: Content {
+    let name: String?
+    let birth: Date?
+    let gender: Int?
+    let diseaseStage: String?
+}
+
+// 🌟 新增：解除綁定專用 Request DTO (支援 Email 或 ID)
+struct UnlinkBondRequestDTO: Content {
+    let caregiverEmail: String?
+    let caregiverID: Int?
 }
