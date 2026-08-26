@@ -392,7 +392,8 @@ struct AIController: RouteCollection {
                     }.filter { !$0.isEmpty }
                     let dailySlotsCount = max(1, slots.count)
                     
-                    let calendar = Calendar.current
+                    var calendar = Calendar.current
+                    calendar.timeZone = taipeiTimeZone
                     let daysSinceStart = calendar.dateComponents([.day], from: calendar.startOfDay(for: plan.startDate), to: calendar.startOfDay(for: Date())).day ?? 7
                     let activeDays = min(7, max(1, daysSinceStart + 1))
                     let expectedCount = dailySlotsCount * activeDays

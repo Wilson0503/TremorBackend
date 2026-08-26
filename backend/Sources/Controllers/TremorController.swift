@@ -92,7 +92,10 @@ struct TremorController: RouteCollection {
             .sort(\.$recordedAt, .ascending)
             .all()
         
-        let calendar = Calendar.current
+        // 🌟 修正：設定 Calendar 時區為台灣時間
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone(identifier: "Asia/Taipei") ?? TimeZone(secondsFromGMT: 8 * 3600)!
+        
         let groupedByDate = Dictionary(grouping: records) { record in
             calendar.startOfDay(for: record.recordedAt)
         }

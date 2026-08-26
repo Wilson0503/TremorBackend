@@ -76,6 +76,7 @@ struct SymptomController: RouteCollection {
                 .all()
         } else {
             let formatter = DateFormatter()
+            formatter.timeZone = TimeZone(identifier: "Asia/Taipei") ?? TimeZone(secondsFromGMT: 8 * 3600)!
             formatter.dateFormat = "yyyy-MM-dd"
             
             guard let dateString = searchDateString, let dayStart = formatter.date(from: dateString) else {
