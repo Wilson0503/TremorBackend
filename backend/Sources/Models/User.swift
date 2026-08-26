@@ -14,9 +14,9 @@ final class User: Model, Content, @unchecked Sendable {
     @Field(key: "disease_stage") var diseaseStage: String?
     @Field(key: "pairing_code") var pairingCode: String?
     @Field(key: "pairing_code_expires_at") var pairingCodeExpiresAt: Date?
-    // 🔥 新增這行
     @Field(key: "active_session_id") var activeSessionID: String?
     @Field(key: "role") var role: Int // 0: 被照護者, 1: 照護者
+
     
     init() {}
     

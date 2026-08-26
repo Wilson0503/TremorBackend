@@ -243,7 +243,7 @@ struct UserController: RouteCollection {
             partnerEmail: patient.email
         )
     }
-    // MARK: - 🌟 1. 更新個人基本資料
+    // MARK: - 🌟 更新個人基本資料與密碼 (方案 1: 舊密碼驗證 + Session 連鎖防禦)
     @Sendable
     func updateProfile(req: Request) async throws -> UserResponse {
         let payload = try req.auth.require(UserPayload.self)
@@ -255,15 +255,39 @@ struct UserController: RouteCollection {
         decoder.dateDecodingStrategy = .iso8601
         let data = try req.content.decode(UpdateProfileRequestDTO.self, using: decoder)
         
+        // 1. 一般個人資訊更新
         if let name = data.name { user.name = name }
         if let birth = data.birth { user.birth = birth }
         if let gender = data.gender { user.gender = gender }
         if let stage = data.diseaseStage { user.diseaseStage = stage }
         
+        // 2. 密碼變更安全驗證
+        if let newPassword = data.newPassword, !newPassword.isEmpty {
+            guard let oldPassword = data.oldPassword, !oldPassword.isEmpty else {
+                throw Abort(.badRequest, reason: "變更密碼時必須提供目前的舊密碼")
+            }
+            
+            // 🛡️ 校驗 1：舊密碼 Hash 比對
+            let isOldPasswordValid = try await req.password.async.verify(oldPassword, created: user.passwordHash)
+            guard isOldPasswordValid else {
+                throw Abort(.unauthorized, reason: "目前舊密碼輸入錯誤")
+            }
+            
+            // 🛡️ 校驗 2：新舊密碼不得相同
+            if oldPassword == newPassword {
+                throw Abort(.badRequest, reason: "新密碼不能與舊密碼相同")
+            }
+            
+            // 寫入新密碼 Hash
+            user.passwordHash = try await req.password.async.hash(newPassword)
+            
+            // 🔥 連鎖防禦：更新 Session ID，使所有舊裝置上的舊 Token 即刻失效
+            user.activeSessionID = UUID().uuidString
+        }
+        
         try await user.update(on: req.db)
         return user.toResponse()
     }
-    
     // MARK: - 🌟 解除照護者與被照護者連結 (支援單一照護者精準解綁)
     @Sendable
     func unlinkBond(req: Request) async throws -> HTTPStatus {

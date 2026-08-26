@@ -54,6 +54,8 @@ struct UpdateProfileRequestDTO: Content {
     let birth: Date?
     let gender: Int?
     let diseaseStage: String?
+    let oldPassword: String?
+    let newPassword: String?
 }
 
 // 🌟 新增：解除綁定專用 Request DTO (支援 Email 或 ID)

@@ -19,4 +19,5 @@ func routes(_ app: Application) throws {
     try protected.register(collection: AIController())
     try protected.register(collection: SymptomController())
     try protected.register(collection: MedicationPlanController())
+    try protected.register(collection: HealthVitalsController())
 }

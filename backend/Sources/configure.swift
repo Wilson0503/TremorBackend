@@ -40,6 +40,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(UpdateDailyRecordAddCaregiverOnly())
     app.migrations.add(CreateSymptomRecord())
     app.migrations.add(CreateMedicationPlan())
+    app.migrations.add(CreateHealthVitalsRecord())
     app.lifecycle.use(ChatCleanupTask())
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET") ?? "fallback_temporary_key"))
     

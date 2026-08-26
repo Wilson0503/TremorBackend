@@ -1,3 +1,7 @@
+//
+//  AIDTO.swift
+//
+
 import Vapor
 import Foundation
 
@@ -38,28 +42,28 @@ struct OpenAIChatRequest: Content {
     var model: String
     var messages: [Message]
     var tools: [Tool]?
-
+    
     struct Message: Content {
         var role: String
         var content: String?
         var tool_calls: [ToolCall]?
         var tool_call_id: String?
     }
-
+    
     struct Tool: Content {
         var type: String = "function"
         var function: FunctionDefinition
-
+        
         struct FunctionDefinition: Content {
             var name: String
             var description: String
             var parameters: ParameterSchema
-
+            
             struct ParameterSchema: Content {
                 var type: String = "object"
                 var properties: [String: PropertyItem] = [:]
                 var required: [String]?
-
+                
                 struct PropertyItem: Content {
                     var type: String = "string"
                     var description: String
@@ -103,4 +107,29 @@ struct OpenAIEmbeddingResponse: Codable {
         let embedding: [Float]
     }
     let data: [EmbeddingData]
+}
+
+// MARK: - 5. 診間溝通卡片與醫療報告匯出 DTO
+struct CustomReportFieldDTO: Content {
+    var title: String
+    var content: String
+}
+
+struct GenerateConsultationSummaryRequestDTO: Content {
+    let startDate: Date
+    let endDate: Date
+    let selectedReportTypes: [String]
+    let selectedCategories: [String]
+    let customCategoryText: String?
+    let includeMoodNotes: Bool
+    let customFields: [CustomReportFieldDTO]?
+}
+
+struct ConsultationSummaryResponseDTO: Content {
+    let preparationBeforeVisit: String
+    let patientStatusDescription: String
+    let comparisonWithLastVisit: String
+    let otherMedicationsOrNotes: String
+    let questionsForDoctor: String
+    let customFieldsSummary: [CustomReportFieldDTO]
 }
