@@ -128,9 +128,9 @@ struct AIController: RouteCollection {
            - 使用者表示「身體不適/手抖加劇/肢體僵硬等症狀」➔ 呼叫 `add_symptom_record`
            - 使用者要求「產生週報/統整本週數據/回顧最近狀況」➔ 呼叫 `get_weekly_health_summary`
            - 使用者詢問「吃了什麼藥/用藥歷史」➔ 呼叫 `get_medication_records`
-        3. 【用藥遵從度週報分析原則】：
+        3. 【用藥遵從度與自評週報分析原則】：
            - 若發現使用者有「漏服排程藥物」或「服用了非排程清單上的額外藥品」，請在週報中以溫和關心的語氣進行提醒。
-           - 結合手抖震顫變化、生理指標、突發異常症狀與心情留言進行綜合分析。
+           - 結合手抖震顫變化、生理指標、每日症狀自評量表、突發異常症狀與心情留言進行綜合分析。
         4. 【防呆防幻覺嚴格守則】：
            - 若使用者說「我剛吃藥了」但未提供「藥名」或「劑量」，【嚴禁】胡亂猜測寫入！請溫柔反問使用者服用哪種藥品與數量。
            - 涉及醫療劑量調整建議時，一律加上安全宣告並提醒遵從專科醫師醫囑。
@@ -166,7 +166,7 @@ struct AIController: RouteCollection {
         let tools: [OpenAIChatRequest.Tool] = [
             .init(function: .init(
                 name: "get_weekly_health_summary",
-                description: "獲取病患近 7 天全方位健康週報：涵蓋震顫數據平均、生理指標、用藥排程與實際服藥對比（包含漏服與非排程用藥分析）、突發異常表徵及心情留言",
+                description: "獲取病患近 7 天全方位健康週報：涵蓋震顫數據平均、生理指標、用藥排程與實際服藥對比（包含漏服與非排程用藥分析）、每日自評量表得分、突發異常表徵及心情留言",
                 parameters: .init(type: "object", properties: [:], required: [])
             )),
             .init(function: .init(
@@ -300,7 +300,7 @@ struct AIController: RouteCollection {
         
         switch name {
         case "get_weekly_health_summary", "get_tremor_report":
-            // 🚀 效能優化：使用 async let 並行撈取 6 大資料庫表
+            // 🚀 效能優化：使用 async let 並行撈取 7 大資料庫表
             async let fetchTremors = TremorAnalysisRecord.query(on: req.db)
                 .filter(\.$userID == targetPatientID)
                 .filter(\.$recordedAt >= sevenDaysAgo)
@@ -332,8 +332,14 @@ struct AIController: RouteCollection {
                 .filter(\.$date >= sevenDaysAgo)
                 .all()
             
-            let (tremors, vitals, plans, meds, symptoms, dailyNotes) = try await (
-                fetchTremors, fetchVitals, fetchPlans, fetchMeds, fetchSymptoms, fetchNotes
+            async let fetchAssessments = DailyAssessmentRecord.query(on: req.db)
+                .filter(\.$userID == targetPatientID)
+                .filter(\.$date >= sevenDaysAgo)
+                .sort(\.$date, .descending)
+                .all()
+            
+            let (tremors, vitals, plans, meds, symptoms, dailyNotes, assessments) = try await (
+                fetchTremors, fetchVitals, fetchPlans, fetchMeds, fetchSymptoms, fetchNotes, fetchAssessments
             )
             
             // 1. 震顫統計
@@ -434,10 +440,20 @@ struct AIController: RouteCollection {
                 """
             }
             
-            // 4. 異常表徵
+            // 4. 每日評估量表統計 (獨立層級)
+            var assessmentSummary = "【本週每日量表自評】：本週無填寫問卷。"
+            if !assessments.isEmpty {
+                let avgTotal = Double(assessments.map(\.totalScore).reduce(0, +)) / Double(assessments.count)
+                let avgMood = Double(assessments.map(\.moodScore).reduce(0, +)) / Double(assessments.count)
+                let avgADL = Double(assessments.map(\.adlScore).reduce(0, +)) / Double(assessments.count)
+                let avgMotor = Double(assessments.map(\.motorScore).reduce(0, +)) / Double(assessments.count)
+                assessmentSummary = "【本週每日量表自評】：累計填寫 \(assessments.count) 次，平均總分 \(String(format: "%.1f", avgTotal)) 分（心情認知 \(String(format: "%.1f", avgMood))/16、生活自理 \(String(format: "%.1f", avgADL))/52、動作能力 \(String(format: "%.1f", avgMotor))/32）。"
+            }
+            
+            // 5. 異常表徵
             let symptomSummary = symptoms.isEmpty ? "【本週突發症狀】：無異常回報。" : "【本週突發症狀】：共登記 \(symptoms.count) 則，症狀包含「\(symptoms.map { $0.symptomNote }.joined(separator: "；"))」。"
             
-            // 5. 心情留言
+            // 6. 心情留言
             let moodSummary = dailyNotes.isEmpty ? "【本週心情留言】：無特別發文。" : "【本週心情留言】：共 \(dailyNotes.count) 則，心情以「\(dailyNotes.compactMap { $0.moodName }.joined(separator: "、"))」為主。"
             
             return """
@@ -445,6 +461,7 @@ struct AIController: RouteCollection {
             \(tremorSummary)
             \(vitalsSummary)
             \(medSummary)
+            \(assessmentSummary)
             \(symptomSummary)
             \(moodSummary)
             """
@@ -605,7 +622,7 @@ struct AIController: RouteCollection {
         dateFormatter.timeZone = taipeiTimeZone
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
         
-        // 🚀 效能優化：使用 async let 並行撈取各模組資料
+        // 🚀 效能優化：使用 async let 並行撈取 7 大模組資料
         async let fetchTremors = TremorAnalysisRecord.query(on: req.db)
             .filter(\.$userID == targetPatientID)
             .filter(\.$recordedAt >= payload.startDate)
@@ -647,8 +664,14 @@ struct AIController: RouteCollection {
             return []
         }()
         
-        let (tremors, vitals, plans, meds, symptoms, moods) = try await (
-            fetchTremors, fetchVitals, fetchPlans, fetchMeds, fetchSymptoms, fetchMoods
+        async let fetchAssessments = DailyAssessmentRecord.query(on: req.db)
+            .filter(\.$userID == targetPatientID)
+            .filter(\.$date >= payload.startDate)
+            .filter(\.$date <= payload.endDate)
+            .all()
+        
+        let (tremors, vitals, plans, meds, symptoms, moods, assessments) = try await (
+            fetchTremors, fetchVitals, fetchPlans, fetchMeds, fetchSymptoms, fetchMoods, fetchAssessments
         )
         
         // 1. 震顫上下文
@@ -689,23 +712,30 @@ struct AIController: RouteCollection {
             medContext = "排程藥品共 \(plans.count) 項，期間內累計登記服藥 \(meds.count) 次（包含：\(medNames.isEmpty ? "無" : medNames)）。"
         }
         
-        // 4. 表徵症狀上下文
+        // 4. 每日量表評估上下文
+        var assessmentContext = "未填寫每日量表評估。"
+        if !assessments.isEmpty {
+            let latest = assessments.sorted(by: { $0.date > $1.date }).first!
+            assessmentContext = "期間內共自評 \(assessments.count) 次。最近一次自評總分 \(latest.totalScore) 分（心情認知: \(latest.moodScore)分、日常生活能力: \(latest.adlScore)分、動作能力: \(latest.motorScore)分）。"
+        }
+        
+        // 5. 表徵症狀上下文
         let symptomContext = symptoms.isEmpty ? "無異常表徵登記。" : symptoms.map { "[\(dateFormatter.string(from: $0.date))] \($0.symptomNote)" }.joined(separator: "；")
         
-        // 5. 心情留言上下文
+        // 6. 心情留言上下文
         let moodContext = !payload.includeMoodNotes ? "未勾選引用心情留言。" : (moods.isEmpty ? "無心情留言。" : moods.map { "[\(dateFormatter.string(from: $0.date))] \($0.content) (\($0.moodName ?? "日常"))" }.joined(separator: "；"))
         
-        // 6. OpenAI 請求
+        // 7. 組裝 OpenAI 提示詞 (強制 JSON 結構化回傳)
         let systemPrompt = """
-        你是專為帕金森氏症病患整理「診間看診溝通卡片」的醫療 AI 助理。
+        你是專為帕金森氏症病患整理「診間看診溝看卡片」的醫療 AI 助理。
         請根據使用者的數據紀錄與所勾選的主題，產出一份給主治醫師快速閱讀的結構化醫病情資。
         
         【撰寫原則】：
-        1. 語言精準、客觀、聚焦臨床重點（如 Wearing-off 藥效消退、異動症、凍結步態、睡眠障礙）。
+        1. 語言精準、客觀、聚焦臨床重點（如 Wearing-off 藥效消退、異動症、凍結步態、睡眠障礙、日常生活功能障礙）。
         2. 請嚴格依照指定的 JSON 格式輸出，不要包含額外的 Markdown 格式或文字。
         3. 欄位說明：
            - preparation_before_visit: 看病前準備事項與隨身資料攜帶提醒。
-           - patient_status_description: 動作狀況與生活功能受限具體描述。
+           - patient_status_description: 動作狀況、量表分數與生活功能受限具體描述。
            - comparison_with_last_visit: 與前期相比的惡化或改善趨勢。
            - other_medications_or_notes: 跨科用藥或特殊作息補充。
            - questions_for_doctor: 列出 2~3 點具體想諮詢專科醫師的用藥與處置問題。
@@ -726,6 +756,7 @@ struct AIController: RouteCollection {
         - 震顫感測器數據：\(tremorContext)
         - 生理健康指標：\(vitalsContext)
         - 用藥狀況：\(medContext)
+        - 每日症狀自評量表：\(assessmentContext)
         - 肢體異常表徵：\(symptomContext)
         - 心情動態：\(moodContext)
         
