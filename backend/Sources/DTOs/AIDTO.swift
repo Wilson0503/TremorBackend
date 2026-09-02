@@ -12,6 +12,7 @@ struct ChatRequestDTO: Content {
 
 struct ChatResponseDTO: Content {
     let reply: String
+    let createdAt: Date
 }
 
 struct ChatHistoryResponseDTO: Content {

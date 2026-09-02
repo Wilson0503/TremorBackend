@@ -47,7 +47,7 @@ struct AIController: RouteCollection {
     
     // MARK: - API: 對話生成 (Agent with RAG + Action State Mutation + Bounded Loop)
     @Sendable
-    func handleChat(req: Request) async throws -> ChatResponseDTO {
+    func handleChat(req: Request) async throws -> Response { // 🔥 改為回傳 Response
         let user = try req.auth.require(UserPayload.self)
         let userID = String(user.userID)
         let userRequest = try req.content.decode(ChatRequestDTO.self)
@@ -99,11 +99,11 @@ struct AIController: RouteCollection {
         }
         
         let searchResults = try await sqlDB.raw("""
-            SELECT content 
-            FROM knowledge_base 
-            ORDER BY embedding <=> \(bind: vectorString)::vector 
-            LIMIT 3
-        """).all()
+                SELECT content 
+                FROM knowledge_base 
+                ORDER BY embedding <=> \(bind: vectorString)::vector 
+                LIMIT 3
+            """).all()
         
         var retrievedContext = ""
         for (index, row) in searchResults.enumerated() {
@@ -117,24 +117,24 @@ struct AIController: RouteCollection {
         let openAIURL = "https://api.openai.com/v1/chat/completions"
         
         let staticSystemPrompt = """
-        【系統最高指引：你是專屬的「帕金森氏症防手抖手套與照護 App 智慧助理（小安）」】
-        
-        核心角色與行動指引：
-        1. 語氣溫暖、具同理心，回答精簡聚焦在 200-300 字以內，善用條列方式提供易讀的摘要。
-        2. 你具備「代辦與數據統整執行能力」，能直接替使用者操作 App 寫入資料庫或查詢數據：
-           - 使用者表示「吃了藥」或「貼了貼布」➔ 呼叫 `add_medication_record`
-           - 使用者表示「想新增用藥提醒/排程」➔ 呼叫 `create_medication_plan`
-           - 使用者表示「想留言/貼便利貼/記錄心情」➔ 呼叫 `add_daily_note`
-           - 使用者表示「身體不適/手抖加劇/肢體僵硬等症狀」➔ 呼叫 `add_symptom_record`
-           - 使用者要求「產生週報/統整本週數據/回顧最近狀況」➔ 呼叫 `get_weekly_health_summary`
-           - 使用者詢問「吃了什麼藥/用藥歷史」➔ 呼叫 `get_medication_records`
-        3. 【用藥遵從度與自評週報分析原則】：
-           - 若發現使用者有「漏服排程藥物」或「服用了非排程清單上的額外藥品」，請在週報中以溫和關心的語氣進行提醒。
-           - 結合手抖震顫變化、生理指標、每日症狀自評量表、突發異常症狀與心情留言進行綜合分析。
-        4. 【防呆防幻覺嚴格守則】：
-           - 若使用者說「我剛吃藥了」但未提供「藥名」或「劑量」，【嚴禁】胡亂猜測寫入！請溫柔反問使用者服用哪種藥品與數量。
-           - 涉及醫療劑量調整建議時，一律加上安全宣告並提醒遵從專科醫師醫囑。
-        """
+            【系統最高指引：你是專屬的「帕金森氏症防手抖手套與照護 App 智慧助理（小安）」】
+            
+            核心角色與行動指引：
+            1. 語氣溫暖、具同理心，回答精簡聚焦在 200-300 字以內，善用條列方式提供易讀的摘要。
+            2. 你具備「代辦與數據統整執行能力」，能直接替使用者操作 App 寫入資料庫或查詢數據：
+               - 使用者表示「吃了藥」或「貼了貼布」➔ 呼叫 `add_medication_record`
+               - 使用者表示「想新增用藥提醒/排程」➔ 呼叫 `create_medication_plan`
+               - 使用者表示「想留言/貼便利貼/記錄心情」➔ 呼叫 `add_daily_note`
+               - 使用者表示「身體不適/手抖加劇/肢體僵硬等症狀」➔ 呼叫 `add_symptom_record`
+               - 使用者要求「產生週報/統整本週數據/回顧最近狀況」➔ 呼叫 `get_weekly_health_summary`
+               - 使用者詢問「吃了什麼藥/用藥歷史」➔ 呼叫 `get_medication_records`
+            3. 【用藥遵從度與自評週報分析原則】：
+               - 若發現使用者有「漏服排程藥物」或「服用了非排程清單上的額外藥品」，請在週報中以溫和關心的語氣進行提醒。
+               - 結合手抖震顫變化、生理指標、每日症狀自評量表、突發異常症狀與心情留言進行綜合分析。
+            4. 【防呆防幻覺嚴格守則】：
+               - 若使用者說「我剛吃藥了」但未提供「藥名」或「劑量」，【嚴禁】胡亂猜測寫入！請溫柔反問使用者服用哪種藥品與數量。
+               - 涉及醫療劑量調整建議時，一律加上安全宣告並提醒遵從專科醫師醫囑。
+            """
         
         var openaiMessages: [OpenAIChatRequest.Message] = [
             .init(role: "system", content: staticSystemPrompt, tool_calls: nil, tool_call_id: nil)
@@ -150,16 +150,16 @@ struct AIController: RouteCollection {
         let currentTimeString = nowFormatter.string(from: Date())
         
         let dynamicUserMessage = """
-        【當前系統時間】\(currentTimeString)
-        【病患近期動態紀錄】
-        \(dynamicPatientContext)
-        ---
-        【檢索知識庫參考資料】
-        \(retrievedContext.isEmpty ? "知識庫中無直接相關資料。" : retrievedContext)
-        ---
-        【使用者本輪提問/指令】
-        \(userRequest.message)
-        """
+            【當前系統時間】\(currentTimeString)
+            【病患近期動態紀錄】
+            \(dynamicPatientContext)
+            ---
+            【檢索知識庫參考資料】
+            \(retrievedContext.isEmpty ? "知識庫中無直接相關資料。" : retrievedContext)
+            ---
+            【使用者本輪提問/指令】
+            \(userRequest.message)
+            """
         
         openaiMessages.append(.init(role: "user", content: dynamicUserMessage, tool_calls: nil, tool_call_id: nil))
         
@@ -284,9 +284,20 @@ struct AIController: RouteCollection {
         let newAiMsg = ChatHistory(userID: userID, role: "assistant", content: finalReply)
         try await newAiMsg.save(on: req.db)
         
-        return ChatResponseDTO(reply: finalReply)
+        // 🔥 取得保存後的時間戳記，並使用 ISO8601 編碼輸出
+        let replyTime = newAiMsg.createdAt ?? Date()
+        let responseDTO = ChatResponseDTO(reply: finalReply, createdAt: replyTime)
+        
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = try encoder.encode(responseDTO)
+        
+        return Response(
+            status: .ok,
+            headers: ["Content-Type": "application/json"],
+            body: .init(data: body)
+        )
     }
-    
     // MARK: - 🛠️ 工具執行引擎 (Tool Execution Dispatcher)
     private func executeToolCall(
         toolCall: ToolCall,
