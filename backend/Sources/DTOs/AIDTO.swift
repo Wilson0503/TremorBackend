@@ -134,3 +134,12 @@ struct ConsultationSummaryResponseDTO: Content {
     let questionsForDoctor: String
     let customFieldsSummary: [CustomReportFieldDTO]
 }
+// MARK: - 6. 看診前準備提示同步 DTO
+struct UpdateConsultationPreparationRequestDTO: Content {
+    let content: String
+}
+
+struct ConsultationPreparationResponseDTO: Content {
+    let content: String
+    let updatedAt: Date?
+}

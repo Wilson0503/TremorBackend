@@ -15,6 +15,8 @@ struct AIController: RouteCollection {
         ai.get("history", use: getChatHistory)
         ai.on(.POST, "knowledge", "upload", body: .collect(maxSize: "10mb"), use: uploadKnowledge)
         ai.post("consultation-summary", use: generateConsultationSummary)
+        ai.get("consultation-preparation", use: getConsultationPreparation)
+        ai.put("consultation-preparation", use: saveConsultationPreparation)
     }
     
     // MARK: - 🔒 核心輔助函式：動態判斷目標病患 ID (支援照護者代辦)
@@ -978,5 +980,53 @@ struct AIController: RouteCollection {
             headers: ["Content-Type": "application/json"],
             body: .init(data: body)
         )
+    }
+    // MARK: - 🌟 API: 讀取最新看診前準備 (GET /api/ai/consultation-preparation)
+    @Sendable
+    func getConsultationPreparation(req: Request) async throws -> Response {
+        let user = try req.auth.require(UserPayload.self)
+        let targetPatientID = try await getTargetPatientID(req: req, currentUserID: user.userID)
+        
+        let record = try await ConsultationPreparation.query(on: req.db)
+            .filter(\.$userID == targetPatientID)
+            .first()
+        
+        let responseDTO = ConsultationPreparationResponseDTO(
+            content: record?.content ?? "",
+            updatedAt: record?.updatedAt ?? record?.createdAt
+        )
+        
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = try encoder.encode(responseDTO)
+        
+        return Response(
+            status: .ok,
+            headers: ["Content-Type": "application/json"],
+            body: .init(data: body)
+        )
+    }
+    
+    // MARK: - 🌟 API: 儲存/覆寫看診前準備 (PUT /api/ai/consultation-preparation)
+    @Sendable
+    func saveConsultationPreparation(req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(UserPayload.self)
+        let targetPatientID = try await getTargetPatientID(req: req, currentUserID: user.userID)
+        let dto = try req.content.decode(UpdateConsultationPreparationRequestDTO.self)
+        
+        if let existing = try await ConsultationPreparation.query(on: req.db)
+            .filter(\.$userID == targetPatientID)
+            .first() {
+            existing.content = dto.content
+            try await existing.update(on: req.db)
+        } else {
+            let newRecord = ConsultationPreparation(
+                userID: targetPatientID,
+                content: dto.content
+            )
+            try await newRecord.save(on: req.db)
+        }
+        
+        return .ok
     }
 }
