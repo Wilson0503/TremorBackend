@@ -68,15 +68,43 @@ struct TremorController: RouteCollection {
         return .ok
     }
     
-    // MARK: - 3. 取得歷史分析紀錄
+    // MARK: - 🔒 核心輔助函式：動態判斷目標病患 ID (支援照護者代看)
+    private func getTargetUserID(req: Request, currentUserID: Int) async throws -> Int {
+        guard let currentUser = try await User.find(currentUserID, on: req.db) else {
+            throw Abort(.notFound, reason: "找不到您的帳號")
+        }
+        if currentUser.role == 1 {
+            guard let bond = try await UserBond.query(on: req.db)
+                .filter(\.$caregiverID == currentUserID)
+                .first() else {
+                throw Abort(.notFound, reason: "目前尚未綁定任何被照護者")
+            }
+            return bond.patientID
+        }
+        return currentUserID
+    }
+    
+    // MARK: - 3. 取得歷史分析紀錄 (GET /tremor/history)
     @Sendable
-    func getAnalysisHistory(req: Request) async throws -> [TremorAnalysisRecord] {
+    func getAnalysisHistory(req: Request) async throws -> Response { // 🔥 改為回傳 Response
         let payload = try req.auth.require(UserPayload.self)
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
         
-        return try await TremorAnalysisRecord.query(on: req.db)
-            .filter(\.$userID == payload.userID)
+        let records = try await TremorAnalysisRecord.query(on: req.db)
+            .filter(\.$userID == targetUserID)
             .sort(\.$recordedAt, .descending)
             .all()
+        
+        // 🔥 強制使用 ISO8601 編碼輸出，保留 recordedAt 的完整時分秒
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = try encoder.encode(records)
+        
+        return Response(
+            status: .ok,
+            headers: ["Content-Type": "application/json"],
+            body: .init(data: body)
+        )
     }
     
     // MARK: - 4. 產生動態週報 (給 App 畫圖用)
