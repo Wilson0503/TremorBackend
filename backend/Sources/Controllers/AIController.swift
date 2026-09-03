@@ -948,9 +948,9 @@ struct AIController: RouteCollection {
         return vector
     }
     
-    // MARK: - API: 取得歷史對話紀錄
+    // MARK: - API: 取得歷史對話紀錄 (GET /api/ai/history)
     @Sendable
-    func getChatHistory(req: Request) async throws -> [ChatHistoryResponseDTO] {
+    func getChatHistory(req: Request) async throws -> Response { // 🔥 改為回傳 Response
         let user = try req.auth.require(UserPayload.self)
         let userID = String(user.userID)
         
@@ -959,7 +959,7 @@ struct AIController: RouteCollection {
             .sort(\.$createdAt, .ascending)
             .all()
         
-        return history.map { chat in
+        let dtos = history.map { chat in
             ChatHistoryResponseDTO(
                 id: chat.id,
                 role: chat.role,
@@ -967,5 +967,16 @@ struct AIController: RouteCollection {
                 createdAt: chat.createdAt
             )
         }
+        
+        // 🔥 強制使用 ISO8601 編碼輸出，保留時分秒並避開全域 yyyy-MM-dd 截斷
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = try encoder.encode(dtos)
+        
+        return Response(
+            status: .ok,
+            headers: ["Content-Type": "application/json"],
+            body: .init(data: body)
+        )
     }
 }
