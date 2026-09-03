@@ -15,35 +15,35 @@ struct MedicationController: RouteCollection {
         meds.on(.PUT, ":recordID", body: .collect(maxSize: "50mb"), use: updateRecord)
     }
     
-    // MARK: - 🔒 核心輔助函式：動態判斷要操作哪位病患的資料
-    private func getTargetUserID(req: Request, currentUserID: Int) async throws -> Int {
-        // 1. 查出當前使用者的實體與身分角色 (role)
+    // MARK: - 🔒 核心輔助函式：動態判斷目標病患 ID (包含權限檢查)
+    private func getTargetUserID(req: Request, currentUserID: Int, checkAddPermission: Bool = false) async throws -> Int {
         guard let currentUser = try await User.find(currentUserID, on: req.db) else {
             throw Abort(.notFound, reason: "找不到您的帳號")
         }
         
-        // 2. 如果是照護者 (role == 1)，則去 UserBond 找綁定的病患
         if currentUser.role == 1 {
             guard let bond = try await UserBond.query(on: req.db)
                 .filter(\.$caregiverID == currentUserID)
                 .first() else {
                 throw Abort(.notFound, reason: "目前尚未綁定任何被照護者")
             }
+            
+            // 🛡️ 後端嚴格校驗：若操作涉及新增/編輯且未獲授權，直接駁回 403
+            if checkAddPermission && !bond.canAddMedRecord {
+                throw Abort(.forbidden, reason: "被照護者尚未授權您新增或編輯用藥紀錄")
+            }
+            
             return bond.patientID
         }
         
-        // 3. 如果是被照護者 (role == 0)，直接回傳自己的 ID
         return currentUserID
     }
     
-    // 1. 儲存用藥紀錄 (照護者可代為新增)
+    // 1. 儲存用藥紀錄 (啟用權限檢查)
     @Sendable
     func addRecord(req: Request) async throws -> HTTPStatus {
         let payload = try req.auth.require(UserPayload.self)
-        
-        // 🔥 動態取得目標 ID
-        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
-        
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID, checkAddPermission: true)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         

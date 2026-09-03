@@ -19,6 +19,7 @@ struct UserController: RouteCollection {
         protected.post("bonds", "link", use: linkPatient)
         protected.get("bonds", "caregivers", use: getCaregivers)
         protected.get("bonds", "patient", use: getPatient)
+        protected.put("bonds", "permissions", use: updateBondPermissions) // 🔥 新增更新權限端點
         protected.put("profile", use: updateProfile)
         protected.delete("bonds", "unlink", use: unlinkBond)
     }
@@ -209,24 +210,25 @@ struct UserController: RouteCollection {
                     bondID: bond.id!,
                     caregiverID: caregiver.id!,
                     partnerName: caregiver.name ?? "未具名家屬",
-                    partnerEmail: caregiver.email
+                    partnerEmail: caregiver.email,
+                    canManageMedPlan: bond.canManageMedPlan, // 🔥 回傳權限
+                    canAddMedRecord: bond.canAddMedRecord    // 🔥 回傳權限
                 ))
             }
         }
         
         return caregiversList
     }
+    
     // MARK: - API: 取得照護者綁定的患者資訊 (適用身分：照護者端)
     @Sendable
     func getPatient(req: Request) async throws -> SinglePatientResponseDTO {
         let payload = try req.auth.require(UserPayload.self)
         
-        // 安全檢查：確認發送請求的是照護者 (role == 1)
         guard let user = try await User.find(payload.userID, on: req.db), user.role == 1 else {
             throw Abort(.forbidden, reason: "只有照護者可以查詢病患資訊")
         }
         
-        // 照前端規格，目前照護者端維持單一患者，所以用 .first()
         guard let bond = try await UserBond.query(on: req.db)
             .filter(\.$caregiverID == payload.userID)
             .first() else {
@@ -237,13 +239,43 @@ struct UserController: RouteCollection {
             throw Abort(.notFound, reason: "找不到該病患資訊")
         }
         
-        // 回傳單一物件格式 (完全符合前端規格)
         return SinglePatientResponseDTO(
             partnerName: patient.name ?? "未具名病患",
-            partnerEmail: patient.email
+            partnerEmail: patient.email,
+            canManageMedPlan: bond.canManageMedPlan, // 🔥 回傳自身擁有的權限
+            canAddMedRecord: bond.canAddMedRecord    // 🔥 回傳自身擁有的權限
         )
     }
-    // MARK: - 🌟 更新個人基本資料與密碼 (方案 1: 舊密碼驗證 + Session 連鎖防禦)
+    
+    // MARK: - 🌟 API: 更新照護者權限 (PUT /users/bonds/permissions)
+    @Sendable
+    func updateBondPermissions(req: Request) async throws -> HTTPStatus {
+        let payload = try req.auth.require(UserPayload.self)
+        
+        // 🛡️ 只有病患 (role == 0) 能配置授權
+        guard let currentUser = try await User.find(payload.userID, on: req.db), currentUser.role == 0 else {
+            throw Abort(.forbidden, reason: "只有被照護者有權限修改照護者授權")
+        }
+        
+        let updateData = try req.content.decode(UpdateBondPermissionsRequestDTO.self)
+        
+        guard let bond = try await UserBond.query(on: req.db)
+            .filter(\.$patientID == payload.userID)
+            .filter(\.$caregiverID == updateData.caregiverID)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到與該照護者的綁定紀錄")
+        }
+        
+        if let canManage = updateData.canManageMedPlan {
+            bond.canManageMedPlan = canManage
+        }
+        if let canAdd = updateData.canAddMedRecord {
+            bond.canAddMedRecord = canAdd
+        }
+        
+        try await bond.update(on: req.db)
+        return .ok
+    }    // MARK: - 🌟 更新個人基本資料與密碼 (方案 1: 舊密碼驗證 + Session 連鎖防禦)
     @Sendable
     func updateProfile(req: Request) async throws -> UserResponse {
         let payload = try req.auth.require(UserPayload.self)

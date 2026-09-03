@@ -10,31 +10,39 @@ struct MedicationPlanController: RouteCollection {
         plans.delete(":planID", use: deletePlan)// 刪除排程
     }
     
-    // 🔒 核心輔助函式：動態判斷要操作哪位病患的資料
-    private func getTargetUserID(req: Request, currentUserID: Int) async throws -> Int {
+    // MARK: - 🔒 核心輔助函式：動態判斷要操作哪位病患的資料 (含用藥清單管理權限檢查)
+    private func getTargetUserID(req: Request, currentUserID: Int, checkManagePermission: Bool = false) async throws -> Int {
         guard let currentUser = try await User.find(currentUserID, on: req.db) else {
             throw Abort(.notFound, reason: "找不到您的帳號")
         }
+        
         if currentUser.role == 1 {
             guard let bond = try await UserBond.query(on: req.db)
                 .filter(\.$caregiverID == currentUserID)
                 .first() else {
                 throw Abort(.notFound, reason: "目前尚未綁定任何被照護者")
             }
+            
+            // 🛡️ 後端嚴格校驗：若涉及排程管理操作且未獲授權，直接回傳 403
+            if checkManagePermission && !bond.canManageMedPlan {
+                throw Abort(.forbidden, reason: "被照護者尚未授權您建立或管理用藥排程清單")
+            }
+            
             return bond.patientID
         }
+        
         return currentUserID
     }
     
-    // 1. 新增或更新用藥排程
+    // MARK: - 1. 新增或更新用藥排程 (POST /medication-plan/save)
     @Sendable
     func savePlan(req: Request) async throws -> HTTPStatus {
         let payload = try req.auth.require(UserPayload.self)
-        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
+        // 🔥 啟用權限校驗：若為照護者，必須具備 canManageMedPlan == true
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID, checkManagePermission: true)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         
-        // 👇 擴充 DTO 接收 startDate
         struct PlanRequestDTO: Content {
             let id: Int?
             let name: String
@@ -42,7 +50,7 @@ struct MedicationPlanController: RouteCollection {
             let medType: String
             let defaultPatchRegion: String?
             let timeSlotsRaw: String
-            let startDate: Date // 新增
+            let startDate: Date
             let repeatFrequency: String
             let customInterval: Int
             let customUnit: String
@@ -61,7 +69,7 @@ struct MedicationPlanController: RouteCollection {
             existing.medType = data.medType
             existing.defaultPatchRegion = data.defaultPatchRegion
             existing.timeSlotsRaw = data.timeSlotsRaw
-            existing.startDate = data.startDate // 👇 補上更新邏輯
+            existing.startDate = data.startDate
             existing.repeatFrequency = data.repeatFrequency
             existing.customInterval = data.customInterval
             existing.customUnit = data.customUnit
@@ -76,7 +84,7 @@ struct MedicationPlanController: RouteCollection {
                 medType: data.medType,
                 defaultPatchRegion: data.defaultPatchRegion,
                 timeSlotsRaw: data.timeSlotsRaw,
-                startDate: data.startDate, // 👇 補上新建邏輯
+                startDate: data.startDate,
                 repeatFrequency: data.repeatFrequency,
                 customInterval: data.customInterval,
                 customUnit: data.customUnit,
@@ -88,11 +96,12 @@ struct MedicationPlanController: RouteCollection {
         return .ok
     }
     
-    // 2. 取得所有用藥排程清單
+    // MARK: - 2. 取得所有用藥排程清單 (GET /medication-plan/all)
     @Sendable
     func getAllPlans(req: Request) async throws -> [MedicationPlan] {
         let payload = try req.auth.require(UserPayload.self)
-        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
+        // 🔍 純檢視清單，checkManagePermission 保持 false，允許照護者隨時查看用藥提醒
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID, checkManagePermission: false)
         
         return try await MedicationPlan.query(on: req.db)
             .filter(\.$userID == targetUserID)
@@ -100,11 +109,12 @@ struct MedicationPlanController: RouteCollection {
             .all()
     }
     
-    // 3. 刪除用藥排程
+    // MARK: - 3. 刪除用藥排程 (DELETE /medication-plan/:planID)
     @Sendable
     func deletePlan(req: Request) async throws -> HTTPStatus {
         let payload = try req.auth.require(UserPayload.self)
-        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID)
+        // 🔥 啟用權限校驗：若為照護者，刪除排程必須具備 canManageMedPlan == true
+        let targetUserID = try await getTargetUserID(req: req, currentUserID: payload.userID, checkManagePermission: true)
         
         guard let planID = req.parameters.get("planID", as: Int.self) else {
             throw Abort(.badRequest, reason: "無效的排程 ID")

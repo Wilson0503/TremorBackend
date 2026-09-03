@@ -36,19 +36,30 @@ struct LinkedPartnerResponseDTO: Content {
     let partnerRole: Int
 }
 
-// 🌟 修改：補上 bondID 與 caregiverID，方便前端 App 辨識與操作
+// 🌟 修改：補上權限欄位（供病患端清單顯示各照護者開關）
 struct CaregiverListResponseDTO: Content {
     let bondID: Int
     let caregiverID: Int
     let partnerName: String
     let partnerEmail: String
+    let canManageMedPlan: Bool // 🔥 新增
+    let canAddMedRecord: Bool  // 🔥 新增
 }
 
+// 🌟 修改：補上權限欄位（供照護者端知道自己被賦予哪些權限，控制 UI 按鈕顯示）
 struct SinglePatientResponseDTO: Content {
     let partnerName: String
     let partnerEmail: String
+    let canManageMedPlan: Bool // 🔥 新增
+    let canAddMedRecord: Bool  // 🔥 新增
 }
 
+// 🌟 新增：病患修改照護者權限專用 Request DTO
+struct UpdateBondPermissionsRequestDTO: Content {
+    let caregiverID: Int
+    let canManageMedPlan: Bool?
+    let canAddMedRecord: Bool?
+}
 struct UpdateProfileRequestDTO: Content {
     let name: String?
     let birth: Date?
