@@ -69,31 +69,33 @@ struct TremorController: RouteCollection {
         )
     }
     
-    // MARK: - 2. 接收演算法分析結果 (POST /tremor/analysis，僅限病患手套/App 上傳)
-    @Sendable
-    func uploadAnalysisRecord(req: Request) async throws -> HTTPStatus {
-        let payload = try req.auth.require(UserPayload.self)
-        let data = try req.content.decode(TremorAnalysisUploadRequest.self)
-        
-        let date = Date(timeIntervalSince1970: Double(data.recordedAtUtcMs) / 1000.0)
-        
-        let record = TremorAnalysisRecord(
-            id: data.id,
-            userID: payload.userID, // 🔒 嚴格由穿戴手套者本人 ID 寫入
-            sessionId: data.sessionId,
-            recordedAt: date,
-            dominantFrequencyHz: data.dominantFrequencyHz,
-            tremorStrengthRmsDps: data.tremorStrengthRmsDps,
-            motorOnFraction: data.motorOnFraction,
-            dataValid: data.dataValid,
-            frequencyReliable: data.frequencyReliable,
-            activityTag: data.activityTag,
-            note: data.note
-        )
-        
-        try await record.save(on: req.db)
-        return .ok
-    }
+    // MARK: - 2. 接收演算法分析結果 (POST /tremor/analysis)
+        @Sendable
+        func uploadAnalysisRecord(req: Request) async throws -> HTTPStatus {
+            let payload = try req.auth.require(UserPayload.self)
+            
+            // 🚀 使用獨立 ISO 8601 解碼器，避免時分秒被全域 yyyy-MM-dd 截斷
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let data = try req.content.decode(TremorAnalysisUploadRequest.self, using: decoder)
+            
+            let record = TremorAnalysisRecord(
+                id: data.id,
+                userID: payload.userID,
+                sessionId: data.sessionId,
+                recordedAt: data.recordedAt, // 🔥 直接寫入解碼後的 Date
+                dominantFrequencyHz: data.dominantFrequencyHz,
+                tremorStrengthRmsDps: data.tremorStrengthRmsDps,
+                motorOnFraction: data.motorOnFraction,
+                dataValid: data.dataValid,
+                frequencyReliable: data.frequencyReliable,
+                activityTag: data.activityTag,
+                note: data.note
+            )
+            
+            try await record.save(on: req.db)
+            return .ok
+        }
     
     // MARK: - 3. 取得歷史分析紀錄 (GET /tremor/history，支援照護者代看 + ISO 8601)
     @Sendable

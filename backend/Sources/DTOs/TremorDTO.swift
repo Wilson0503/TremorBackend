@@ -12,7 +12,7 @@ struct RawTremorUploadRequest: Content {
 struct TremorAnalysisUploadRequest: Content {
     let id: UUID
     let sessionId: String
-    let recordedAtUtcMs: Int64
+    let recordedAt: Date
     let dominantFrequencyHz: Double?
     let tremorStrengthRmsDps: Double?
     let motorOnFraction: Double
