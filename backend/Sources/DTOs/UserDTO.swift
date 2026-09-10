@@ -11,6 +11,7 @@ struct UserResponse: Content {
     let pairingCode: String?
     let pairingCodeExpiresAt: Date?
     let role: Int
+    let avatarData: Data? // 🔥 新增
 }
 
 struct LoginResponse: Content {
@@ -67,6 +68,7 @@ struct UpdateProfileRequestDTO: Content {
     let diseaseStage: String?
     let oldPassword: String?
     let newPassword: String?
+    let avatarData: Data? // 🔥 新增
 }
 
 // 🌟 新增：解除綁定專用 Request DTO (支援 Email 或 ID)

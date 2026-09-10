@@ -20,7 +20,7 @@ struct UserController: RouteCollection {
         protected.get("bonds", "caregivers", use: getCaregivers)
         protected.get("bonds", "patient", use: getPatient)
         protected.put("bonds", "permissions", use: updateBondPermissions) // 🔥 新增更新權限端點
-        protected.put("profile", use: updateProfile)
+        protected.on(.PUT, "profile", body: .collect(maxSize: "10mb"), use: updateProfile)
         protected.delete("bonds", "unlink", use: unlinkBond)
     }
     
@@ -292,6 +292,7 @@ struct UserController: RouteCollection {
         if let birth = data.birth { user.birth = birth }
         if let gender = data.gender { user.gender = gender }
         if let stage = data.diseaseStage { user.diseaseStage = stage }
+        if let avatar = data.avatarData {user.avatarData = avatar }
         
         // 2. 密碼變更安全驗證
         if let newPassword = data.newPassword, !newPassword.isEmpty {

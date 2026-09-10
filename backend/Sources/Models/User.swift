@@ -15,11 +15,11 @@ final class User: Model, Content, @unchecked Sendable {
     @Field(key: "pairing_code") var pairingCode: String?
     @Field(key: "pairing_code_expires_at") var pairingCodeExpiresAt: Date?
     @Field(key: "active_session_id") var activeSessionID: String?
-    @Field(key: "role") var role: Int // 0: 被照護者, 1: 照護者
+    @Field(key: "role") var role: Int
+    @OptionalField(key: "avatar_data") var avatarData: Data? // 🔥 新增頭貼欄位
 
-    
     init() {}
-    
+
     init(
         id: Int? = nil,
         email: String,
@@ -30,7 +30,8 @@ final class User: Model, Content, @unchecked Sendable {
         diseaseStage: String? = nil,
         pairingCode: String? = nil,
         pairingCodeExpiresAt: Date? = nil,
-        role: Int = 0 // 💡 預設為 0
+        role: Int = 0,
+        avatarData: Data? = nil // 🔥
     ) {
         self.id = id
         self.email = email
@@ -41,9 +42,10 @@ final class User: Model, Content, @unchecked Sendable {
         self.diseaseStage = diseaseStage
         self.pairingCode = pairingCode
         self.pairingCodeExpiresAt = pairingCodeExpiresAt
-        self.role = role // 🔥 賦值
+        self.role = role
+        self.avatarData = avatarData
     }
-    
+
     func toResponse() -> UserResponse {
         return UserResponse(
             id: self.id,
@@ -54,7 +56,8 @@ final class User: Model, Content, @unchecked Sendable {
             diseaseStage: self.diseaseStage,
             pairingCode: self.pairingCode,
             pairingCodeExpiresAt: self.pairingCodeExpiresAt,
-            role: self.role // 🔥 傳遞給前端 DTO
+            role: self.role,
+            avatarData: self.avatarData // 🔥 傳回給 App
         )
     }
 }
