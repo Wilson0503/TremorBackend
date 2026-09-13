@@ -355,14 +355,15 @@ struct AIController: RouteCollection {
                 fetchTremors, fetchVitals, fetchPlans, fetchMeds, fetchSymptoms, fetchNotes, fetchAssessments
             )
             
-            // 1. 震顫統計
-            var tremorSummary = "【本週震顫量測】：無量測數據。"
+            // 1. 震顫統計 (對齊演算法規範：筆數為 0.5s 分析快照，不當作臨床發作次數)
+            var tremorSummary = "【本週動作震顫分析】：無有效量測數據。"
             if !tremors.isEmpty {
-                let freqs = tremors.compactMap { $0.dominantFrequencyHz }
+                let freqs = tremors.filter { $0.frequencyReliable }.compactMap { $0.dominantFrequencyHz }
                 let amps = tremors.compactMap { $0.tremorStrengthRmsDps }
-                let avgF = freqs.isEmpty ? 0 : freqs.reduce(0, +) / Double(freqs.count)
                 let avgA = amps.isEmpty ? 0 : amps.reduce(0, +) / Double(amps.count)
-                tremorSummary = "【本週震顫量測】：共量測 \(tremors.count) 次，平均震顫頻率 \(String(format: "%.1f", avgF)) Hz，平均震顫強度 \(String(format: "%.2f", avgA)) dps。"
+                let freqDesc = freqs.isEmpty ? "期間未檢出穩定主要頻率" : "平均主要頻率 \(String(format: "%.1f", freqs.reduce(0, +) / Double(freqs.count))) Hz"
+                
+                tremorSummary = "【本週動作震顫分析】：共記錄 \(tremors.count) 筆 0.5 秒動作分析數據（非發作次數），平均 4–6 Hz 強度 \(String(format: "%.2f", avgA)) deg/s RMS，\(freqDesc)。"
             }
             
             // 2. 生理指標統計
@@ -687,15 +688,15 @@ struct AIController: RouteCollection {
             fetchTremors, fetchVitals, fetchPlans, fetchMeds, fetchSymptoms, fetchMoods, fetchAssessments
         )
         
-        // 1. 震顫上下文
-        var tremorContext = "無震顫量測紀錄。"
+        // 1. 震顫上下文 (依據演算法指引：移除未驗證的 0.20 嚴重度分級，筆數為分析快照非發作次數)
+        var tremorContext = "無動作震顫分析紀錄。"
         if !tremors.isEmpty {
-            let freqs = tremors.compactMap { $0.dominantFrequencyHz }
+            let freqs = tremors.filter { $0.frequencyReliable }.compactMap { $0.dominantFrequencyHz }
             let amps = tremors.compactMap { $0.tremorStrengthRmsDps }
-            let avgF = freqs.isEmpty ? 0 : freqs.reduce(0, +) / Double(freqs.count)
             let avgA = amps.isEmpty ? 0 : amps.reduce(0, +) / Double(amps.count)
-            let highEvents = tremors.filter { ($0.tremorStrengthRmsDps ?? 0) >= 0.20 }.count
-            tremorContext = "量測次數: \(tremors.count) 次，平均震顫頻率: \(String(format: "%.1f", avgF)) Hz，平均強度: \(String(format: "%.2f", avgA)) dps，中重度震顫事件次數: \(highEvents) 次。"
+            let freqDesc = freqs.isEmpty ? "未檢出穩定主要頻率" : "平均主要頻率: \(String(format: "%.1f", freqs.reduce(0, +) / Double(freqs.count))) Hz"
+            
+            tremorContext = "動作分析紀錄共 \(tremors.count) 筆（0.5秒取樣快照，非發作次數），平均 4–6 Hz 角速度強度: \(String(format: "%.2f", avgA)) deg/s RMS，\(freqDesc)。"
         }
         
         // 2. 生理指標上下文
@@ -740,20 +741,21 @@ struct AIController: RouteCollection {
         
         // 7. 組裝 OpenAI 提示詞 (強制 JSON 結構化回傳)
         let systemPrompt = """
-        你是專為帕金森氏症病患整理「診間看診溝看卡片」的醫療 AI 助理。
-        請根據使用者的數據紀錄與所勾選的主題，產出一份給主治醫師快速閱讀的結構化醫病情資。
-        
-        【撰寫原則】：
-        1. 語言精準、客觀、聚焦臨床重點（如 Wearing-off 藥效消退、異動症、凍結步態、睡眠障礙、日常生活功能障礙）。
-        2. 請嚴格依照指定的 JSON 格式輸出，不要包含額外的 Markdown 格式或文字。
-        3. 欄位說明：
-           - preparation_before_visit: 看病前準備事項與隨身資料攜帶提醒。
-           - patient_status_description: 動作狀況、量表分數與生活功能受限具體描述。
-           - comparison_with_last_visit: 與前期相比的惡化或改善趨勢。
-           - other_medications_or_notes: 跨科用藥或特殊作息補充。
-           - questions_for_doctor: 列出 2~3 點具體想諮詢專科醫師的用藥與處置問題。
-           - custom_fields_summary: 針對使用者自訂項目給予對應的摘要字串陣列。
-        """
+                你是專為帕金森氏症病患整理「診間看診溝通卡片」的醫療 AI 助理。
+                請根據使用者的數據紀錄與所勾選的主題，產出一份給主治醫師快速閱讀的結構化醫病情資。
+                
+                【撰寫原則】：
+                1. 語言精準、客觀、聚焦臨床重點（如 Wearing-off 藥效消退、異動症、凍結步態、睡眠障礙、日常生活功能障礙）。
+                2. 震顫數據屬於穿戴手套的「動作分析取樣紀錄（0.5秒計算視窗）」，請勿將紀錄筆數詮釋為患者真實的「震顫發作次數」，亦不得使用 0.20 deg/s 進行未經臨床驗證的「中度或劇烈震顫」分級。
+                3. 請嚴格依照指定的 JSON 格式輸出，不要包含額外的 Markdown 格式或文字。
+                4. 欄位說明：
+                   - preparation_before_visit: 看病前準備事項與隨身資料攜帶提醒。
+                   - patient_status_description: 動作狀況、量表分數與生活功能受限具體描述。
+                   - comparison_with_last_visit: 與前期相比的惡化或改善趨勢。
+                   - other_medications_or_notes: 跨科用藥或特殊作息補充。
+                   - questions_for_doctor: 列出 2~3 點具體想諮詢專科醫師的用藥與處置問題。
+                   - custom_fields_summary: 針對使用者自訂項目給予對應的摘要字串陣列。
+                """
         
         let customFieldsPrompt = payload.customFields?.map { "自訂欄位名稱：\($0.title)" }.joined(separator: "\n") ?? "無自訂欄位"
         
