@@ -17,9 +17,12 @@ final class User: Model, Content, @unchecked Sendable {
     @Field(key: "active_session_id") var activeSessionID: String?
     @Field(key: "role") var role: Int
     @OptionalField(key: "avatar_data") var avatarData: Data? // 🔥 新增頭貼欄位
-
+    // 在 activeSessionID 之後加入：
+    @OptionalField(key: "reset_code") var resetCode: String?
+    @OptionalField(key: "reset_code_expires_at") var resetCodeExpiresAt: Date?
+    
     init() {}
-
+    
     init(
         id: Int? = nil,
         email: String,
@@ -45,7 +48,7 @@ final class User: Model, Content, @unchecked Sendable {
         self.role = role
         self.avatarData = avatarData
     }
-
+    
     func toResponse() -> UserResponse {
         return UserResponse(
             id: self.id,

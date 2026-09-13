@@ -7,7 +7,10 @@ struct UserController: RouteCollection {
         let users = routes.grouped("users")
         users.post("register", use: register)
         users.post("login", use: login)
-        users.post("reset-password", use: resetPassword) // 🔥 公開重設密碼端點
+        // 🔥 忘記密碼相關公開端點
+        users.post("forgot-password", use: sendResetCode)
+        users.post("verify-reset-code", use: verifyResetCode)
+        users.post("reset-password", use: resetPasswordWithCode)
         
         // 🔥 在這裡把 SingleDeviceMiddleware() 也加進去！
         let protected = users.grouped(
@@ -368,54 +371,133 @@ struct UserController: RouteCollection {
         try await bond.delete(on: req.db)
         return .noContent
     }
-    // MARK: - 忘記密碼：身分特徵核驗與密碼重設 (POST /users/reset-password)
+    // MARK: - 1. 發送重設密碼驗證碼 (POST /users/forgot-password)
     @Sendable
-    func resetPassword(req: Request) async throws -> HTTPStatus {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let data = try req.content.decode(ResetPasswordRequestDTO.self, using: decoder)
-        
+    func sendResetCode(req: Request) async throws -> HTTPStatus {
+        let data = try req.content.decode(ForgotPasswordRequestDTO.self)
         let trimmedEmail = data.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let trimmedName = data.name.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // 1. 查找該 Email 使用者
         guard let user = try await User.query(on: req.db)
             .filter(\.$email == trimmedEmail)
             .first() else {
-            throw Abort(.notFound, reason: "找不到該電子信箱對應的使用者帳號")
+            throw Abort(.notFound, reason: "找不到該電子信箱對應的帳號")
         }
         
-        // 2. 核對身分：姓名比對
-        guard let dbName = user.name?.trimmingCharacters(in: .whitespacesAndNewlines), dbName == trimmedName else {
-            throw Abort(.unauthorized, reason: "身分驗證失敗：填寫之姓名與註冊紀錄不符")
+        // 產生 6 位數驗證碼 (時效 10 分鐘)
+        let code = String(Int.random(in: 100000...999999))
+        user.resetCode = code
+        user.resetCodeExpiresAt = Date().addingTimeInterval(600)
+        try await user.update(on: req.db)
+        
+        // 發送驗證信 (透過 Resend API)
+        try await sendResendResetEmail(req: req, targetEmail: trimmedEmail, userName: user.name ?? "用戶", code: code)
+        
+        return .ok
+    }
+    
+    // MARK: - 2. 校驗驗證碼是否正確與過期 (POST /users/verify-reset-code)
+    @Sendable
+    func verifyResetCode(req: Request) async throws -> HTTPStatus {
+        let data = try req.content.decode(VerifyResetCodeRequestDTO.self)
+        let trimmedEmail = data.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedCode = data.code.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$email == trimmedEmail)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到該電子信箱對應的帳號")
         }
         
-        // 3. 核對身分：出生年月日比對 (鎖定台北時區以防日光節約/時區位移)
-        guard let dbBirth = user.birth else {
-            throw Abort(.badRequest, reason: "該帳號未設定出生年月日，無法透過身分比對重設")
+        guard let dbCode = user.resetCode, dbCode == trimmedCode else {
+            throw Abort(.unauthorized, reason: "驗證碼錯誤，請重新確認")
         }
         
-        var calendar = Calendar.current
-        calendar.timeZone = TimeZone(identifier: "Asia/Taipei") ?? TimeZone(secondsFromGMT: 8 * 3600)!
-        let isSameBirth = calendar.isDate(dbBirth, inSameDayAs: data.birth)
-        guard isSameBirth else {
-            throw Abort(.unauthorized, reason: "身分驗證失敗：出生年月日與註冊紀錄不符")
+        guard let expiry = user.resetCodeExpiresAt, expiry > Date() else {
+            throw Abort(.badRequest, reason: "驗證碼已過期，請重新發送")
         }
         
-        // 4. 密碼強度檢核 (至少 8 碼，包含大小寫英文字母與數字)
+        return .ok
+    }
+    
+    // MARK: - 3. 輸入驗證碼與新密碼完成重設 (POST /users/reset-password)
+    @Sendable
+    func resetPasswordWithCode(req: Request) async throws -> HTTPStatus {
+        let data = try req.content.decode(ResetPasswordWithCodeRequestDTO.self)
+        let trimmedEmail = data.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedCode = data.code.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$email == trimmedEmail)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到該電子信箱對應的帳號")
+        }
+        
+        // 再次防呆驗證驗證碼與時效
+        guard let dbCode = user.resetCode, dbCode == trimmedCode else {
+            throw Abort(.unauthorized, reason: "驗證碼錯誤")
+        }
+        
+        guard let expiry = user.resetCodeExpiresAt, expiry > Date() else {
+            throw Abort(.badRequest, reason: "驗證碼已過期，請重新申請")
+        }
+        
+        // 密碼強度檢核 (至少 8 碼，包含大寫、小寫字母與數字)
         let passwordRegex = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$"
-        let isStrongPassword = data.newPassword.range(of: passwordRegex, options: .regularExpression) != nil
-        guard isStrongPassword else {
-            throw Abort(.badRequest, reason: "新密碼需至少 8 碼，且必須同時包含大寫字母、小寫字母與數字")
+        guard data.newPassword.range(of: passwordRegex, options: .regularExpression) != nil else {
+            throw Abort(.badRequest, reason: "新密碼需至少 8 碼，且必須同時包含大寫英文字母、小寫英文字母與數字")
         }
         
-        // 5. 雜湊加密新密碼
+        // 更新雜湊密碼、清空驗證碼，並連鎖撤銷舊 Session
         user.passwordHash = try await req.password.async.hash(data.newPassword)
-        
-        // 6. 連鎖防禦：強制更新 Session ID，使舊裝置上的 Token 即刻失效
+        user.resetCode = nil
+        user.resetCodeExpiresAt = nil
         user.activeSessionID = UUID().uuidString
         try await user.update(on: req.db)
         
         return .ok
+    }
+    
+    // MARK: - 輔助函式：呼叫 Resend REST API 發送驗證信
+    private func sendResendResetEmail(req: Request, targetEmail: String, userName: String, code: String) async throws {
+        guard let apiKey = Environment.get("RESEND_API_KEY"), !apiKey.isEmpty else {
+            req.logger.error("未配置 RESEND_API_KEY，略過信件發送，驗證碼為：\(code)")
+            return
+        }
+        
+        // 關鍵：若在未自訂網域的沙盒模式下，一律轉發至管理員 Email
+        let destinationEmail = Environment.get("ADMIN_NOTIFICATION_EMAIL") ?? targetEmail
+        
+        let htmlBody = """
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: auto; padding: 24px; border: 1px solid #eaeaea; border-radius: 12px;">
+                <h2 style="color: #2b5c8f;">SteadyHope 智慧醫療照護</h2>
+                <p>您好 <strong>\(userName)</strong>：</p>
+                <p>我們收到了您重設密碼的請求。請在 App 中輸入以下 6 位數安全驗證碼：</p>
+                <div style="background-color: #f4f6f9; padding: 16px; border-radius: 8px; text-align: center; margin: 24px 0;">
+                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #1e3a8a;">\(code)</span>
+                </div>
+                <p style="color: #64748b; font-size: 13px;">• 該驗證碼將於 <strong>10 分鐘</strong> 後過期。<br>• 原請求帳號：\(targetEmail)<br>• 若非您本人發起此操作，請忽略本信件以確保帳戶安全。</p>
+            </div>
+            """
+        
+        let resendPayload = ResendEmailRequestDTO(
+            from: "SteadyHope 系統通知 <onboarding@resend.dev>",
+            to: [destinationEmail],
+            subject: "【SteadyHope】密碼重設驗證碼 (\(targetEmail))",
+            html: htmlBody
+        )
+        
+        var headers = HTTPHeaders()
+        headers.add(name: "Authorization", value: "Bearer \(apiKey)")
+        headers.add(name: "Content-Type", value: "application/json")
+        
+        let response = try await req.client.post("https://api.resend.com/emails", headers: headers) { clientReq in
+            try clientReq.content.encode(resendPayload, as: .json)
+        }
+        
+        guard response.status == .ok else {
+            let errorText = response.body?.getString(at: 0, length: response.body?.readableBytes ?? 0) ?? "未知錯誤"
+            req.logger.error("Resend API 寄件失敗：\(errorText)")
+            throw Abort(.badGateway, reason: "驗證信件發送失敗，請稍後再試")
+        }
     }
 }

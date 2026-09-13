@@ -83,3 +83,28 @@ struct ResetPasswordRequestDTO: Content {
     let birth: Date
     let newPassword: String
 }
+// 1. 發送驗證碼請求
+struct ForgotPasswordRequestDTO: Content {
+    let email: String
+}
+
+// 2. 校驗驗證碼請求
+struct VerifyResetCodeRequestDTO: Content {
+    let email: String
+    let code: String
+}
+
+// 3. 執行重設密碼請求
+struct ResetPasswordWithCodeRequestDTO: Content {
+    let email: String
+    let code: String
+    let newPassword: String
+}
+
+// Resend HTTP API 專用 Request DTO
+struct ResendEmailRequestDTO: Content {
+    let from: String
+    let to: [String]
+    let subject: String
+    let html: String
+}
