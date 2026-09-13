@@ -7,6 +7,7 @@ struct UserController: RouteCollection {
         let users = routes.grouped("users")
         users.post("register", use: register)
         users.post("login", use: login)
+        users.post("reset-password", use: resetPassword) // 🔥 公開重設密碼端點
         
         // 🔥 在這裡把 SingleDeviceMiddleware() 也加進去！
         let protected = users.grouped(
@@ -366,5 +367,55 @@ struct UserController: RouteCollection {
         
         try await bond.delete(on: req.db)
         return .noContent
+    }
+    // MARK: - 忘記密碼：身分特徵核驗與密碼重設 (POST /users/reset-password)
+    @Sendable
+    func resetPassword(req: Request) async throws -> HTTPStatus {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try req.content.decode(ResetPasswordRequestDTO.self, using: decoder)
+        
+        let trimmedEmail = data.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedName = data.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // 1. 查找該 Email 使用者
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$email == trimmedEmail)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到該電子信箱對應的使用者帳號")
+        }
+        
+        // 2. 核對身分：姓名比對
+        guard let dbName = user.name?.trimmingCharacters(in: .whitespacesAndNewlines), dbName == trimmedName else {
+            throw Abort(.unauthorized, reason: "身分驗證失敗：填寫之姓名與註冊紀錄不符")
+        }
+        
+        // 3. 核對身分：出生年月日比對 (鎖定台北時區以防日光節約/時區位移)
+        guard let dbBirth = user.birth else {
+            throw Abort(.badRequest, reason: "該帳號未設定出生年月日，無法透過身分比對重設")
+        }
+        
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone(identifier: "Asia/Taipei") ?? TimeZone(secondsFromGMT: 8 * 3600)!
+        let isSameBirth = calendar.isDate(dbBirth, inSameDayAs: data.birth)
+        guard isSameBirth else {
+            throw Abort(.unauthorized, reason: "身分驗證失敗：出生年月日與註冊紀錄不符")
+        }
+        
+        // 4. 密碼強度檢核 (至少 8 碼，包含大小寫英文字母與數字)
+        let passwordRegex = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$"
+        let isStrongPassword = data.newPassword.range(of: passwordRegex, options: .regularExpression) != nil
+        guard isStrongPassword else {
+            throw Abort(.badRequest, reason: "新密碼需至少 8 碼，且必須同時包含大寫字母、小寫字母與數字")
+        }
+        
+        // 5. 雜湊加密新密碼
+        user.passwordHash = try await req.password.async.hash(data.newPassword)
+        
+        // 6. 連鎖防禦：強制更新 Session ID，使舊裝置上的 Token 即刻失效
+        user.activeSessionID = UUID().uuidString
+        try await user.update(on: req.db)
+        
+        return .ok
     }
 }

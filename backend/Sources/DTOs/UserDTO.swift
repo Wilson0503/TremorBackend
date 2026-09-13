@@ -76,3 +76,10 @@ struct UnlinkBondRequestDTO: Content {
     let caregiverEmail: String?
     let caregiverID: Int?
 }
+// 忘記密碼／身分核驗重設密碼 Request DTO
+struct ResetPasswordRequestDTO: Content {
+    let email: String
+    let name: String
+    let birth: Date
+    let newPassword: String
+}
