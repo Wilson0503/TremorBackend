@@ -28,3 +28,27 @@ struct TrendPoint: Content {
     let averageFrequency: Double
     let averageAmplitude: Double
 }
+// 4. 更新震顫分析紀錄標籤與備註 DTO (雙向相容 camelCase 與 snake_case)
+struct UpdateTremorAnalysisRequestDTO: Content {
+    let activityTag: String?
+    let note: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case activityTag
+        case activityTagSnake = "activity_tag"
+        case note
+    }
+    
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        // 優先讀取 activity_tag (snake_case)，若無則讀取 activityTag (camelCase)
+        if let tagSnake = try container.decodeIfPresent(String.self, forKey: .activityTagSnake) {
+            self.activityTag = tagSnake
+        } else {
+            self.activityTag = try container.decodeIfPresent(String.self, forKey: .activityTag)
+        }
+        
+        self.note = try container.decodeIfPresent(String.self, forKey: .note)
+    }
+}

@@ -1,7 +1,3 @@
-//
-//  AIController.swift
-//
-
 import Vapor
 import Foundation
 import Fluent

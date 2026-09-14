@@ -10,6 +10,7 @@ struct TremorController: RouteCollection {
         tremor.post("raw", use: uploadRawData)
         tremor.get("raw", use: getRawDataHistory)
         tremor.post("analysis", use: uploadAnalysisRecord)
+        tremor.patch("analysis", ":recordID", use: updateAnalysisRecord) // 🔥 精確對應 PATCH /tremor/analysis/:recordId
         tremor.get("history", use: getAnalysisHistory)
         tremor.get("weekly-report", use: getWeeklyReport)
     }
@@ -70,32 +71,32 @@ struct TremorController: RouteCollection {
     }
     
     // MARK: - 2. 接收演算法分析結果 (POST /tremor/analysis)
-        @Sendable
-        func uploadAnalysisRecord(req: Request) async throws -> HTTPStatus {
-            let payload = try req.auth.require(UserPayload.self)
-            
-            // 🚀 使用獨立 ISO 8601 解碼器，避免時分秒被全域 yyyy-MM-dd 截斷
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let data = try req.content.decode(TremorAnalysisUploadRequest.self, using: decoder)
-            
-            let record = TremorAnalysisRecord(
-                id: data.id,
-                userID: payload.userID,
-                sessionId: data.sessionId,
-                recordedAt: data.recordedAt, // 🔥 直接寫入解碼後的 Date
-                dominantFrequencyHz: data.dominantFrequencyHz,
-                tremorStrengthRmsDps: data.tremorStrengthRmsDps,
-                motorOnFraction: data.motorOnFraction,
-                dataValid: data.dataValid,
-                frequencyReliable: data.frequencyReliable,
-                activityTag: data.activityTag,
-                note: data.note
-            )
-            
-            try await record.save(on: req.db)
-            return .ok
-        }
+    @Sendable
+    func uploadAnalysisRecord(req: Request) async throws -> HTTPStatus {
+        let payload = try req.auth.require(UserPayload.self)
+        
+        // 🚀 使用獨立 ISO 8601 解碼器，避免時分秒被全域 yyyy-MM-dd 截斷
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try req.content.decode(TremorAnalysisUploadRequest.self, using: decoder)
+        
+        let record = TremorAnalysisRecord(
+            id: data.id,
+            userID: payload.userID,
+            sessionId: data.sessionId,
+            recordedAt: data.recordedAt, // 🔥 直接寫入解碼後的 Date
+            dominantFrequencyHz: data.dominantFrequencyHz,
+            tremorStrengthRmsDps: data.tremorStrengthRmsDps,
+            motorOnFraction: data.motorOnFraction,
+            dataValid: data.dataValid,
+            frequencyReliable: data.frequencyReliable,
+            activityTag: data.activityTag,
+            note: data.note
+        )
+        
+        try await record.save(on: req.db)
+        return .ok
+    }
     
     // MARK: - 3. 取得歷史分析紀錄 (GET /tremor/history，支援照護者代看 + ISO 8601)
     @Sendable
@@ -153,5 +154,37 @@ struct TremorController: RouteCollection {
         }
         
         return report.sorted { $0.date < $1.date }
+    }
+    // MARK: - 5. 更新既有震顫分析紀錄 (PATCH /tremor/analysis/:recordID)
+    @Sendable
+    func updateAnalysisRecord(req: Request) async throws -> HTTPStatus {
+        let payload = try req.auth.require(UserPayload.self)
+        
+        // 1. 取得並驗證 URL 上的 recordId
+        guard let recordID = req.parameters.get("recordID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "無效的紀錄 UUID 格式")
+        }
+        
+        // 2. 查找紀錄：同時核驗 id 與所屬的 user_id
+        guard let record = try await TremorAnalysisRecord.query(on: req.db)
+            .filter(\.$id == recordID)
+            .filter(\.$userID == payload.userID)
+            .first() else {
+            throw Abort(.notFound, reason: "找不到該筆分析紀錄或無權限修改")
+        }
+        
+        // 3. 解碼 Request Body
+        let data = try req.content.decode(UpdateTremorAnalysisRequestDTO.self)
+        
+        // 4. 僅更新 activity_tag 與 note，其餘感測數據與時間戳記完全保留
+        if let activityTag = data.activityTag {
+            record.activityTag = activityTag
+        }
+        if let note = data.note {
+            record.note = note
+        }
+        
+        try await record.update(on: req.db)
+        return .ok
     }
 }
