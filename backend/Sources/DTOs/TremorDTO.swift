@@ -51,4 +51,11 @@ struct UpdateTremorAnalysisRequestDTO: Content {
         
         self.note = try container.decodeIfPresent(String.self, forKey: .note)
     }
+    
+    // 補上手動 encode 實作以滿足 Content (Encodable) 規範
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.activityTag, forKey: .activityTag)
+        try container.encodeIfPresent(self.note, forKey: .note)
+    }
 }
