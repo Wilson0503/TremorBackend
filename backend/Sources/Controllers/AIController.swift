@@ -43,9 +43,9 @@ struct AIController: RouteCollection {
         return (apiKey, headers)
     }
     
-    // MARK: - API: 對話生成 (Agent with RAG + Action State Mutation + Bounded Loop)
+    // MARK: - API: 對話生成 (Agent with RAG + Hybrid Memory Architecture)
     @Sendable
-    func handleChat(req: Request) async throws -> Response { // 🔥 改為回傳 Response
+    func handleChat(req: Request) async throws -> Response {
         let user = try req.auth.require(UserPayload.self)
         let userID = String(user.userID)
         let userRequest = try req.content.decode(ChatRequestDTO.self)
@@ -76,32 +76,34 @@ struct AIController: RouteCollection {
             }.joined(separator: "\n")
         }
         
-        // 2. 撈取最新 6 筆歷史對話維持記憶窗口
+        // 2. 短期工作記憶：撈取最新 4 筆歷史對話維持時序窗口 (約 2 輪對答)
         let recentHistory = try await ChatHistory.query(on: req.db)
             .filter(\.$userID == userID)
             .sort(\.$createdAt, .descending)
-            .limit(6)
+            .limit(4)
             .all()
             .reversed()
         
-        // 3. 儲存使用者提問
-        let newUserMsg = ChatHistory(userID: userID, role: "user", content: userRequest.message)
-        try await newUserMsg.save(on: req.db)
-        
-        // 4. RAG 向量檢索
+        // 3. 計算提問向量 (零額外開銷：一次計算供存檔、知識庫檢索與長期記憶三方共用)
         let questionVector = try await generateEmbedding(for: userRequest.message, req: req)
         let vectorString = "[" + questionVector.map { String($0) }.joined(separator: ",") + "]"
+        
+        // 4. 儲存使用者本輪提問 (將向量寫入 embedding 欄位，不再呈現 NULL)
+        let newUserMsg = ChatHistory(userID: userID, role: "user", content: userRequest.message)
+        newUserMsg.embedding = questionVector
+        try await newUserMsg.save(on: req.db)
         
         guard let sqlDB = req.db as? any SQLDatabase else {
             throw Abort(.internalServerError, reason: "資料庫連線異常，無法執行向量搜尋")
         }
         
+        // 5. 檢索 A：RAG 衛教與系統知識庫 (Top 3)
         let searchResults = try await sqlDB.raw("""
-                SELECT content 
-                FROM knowledge_base 
-                ORDER BY embedding <=> \(bind: vectorString)::vector 
-                LIMIT 3
-            """).all()
+                    SELECT content 
+                    FROM knowledge_base 
+                    ORDER BY embedding <=> \(bind: vectorString)::vector 
+                    LIMIT 3
+                """).all()
         
         var retrievedContext = ""
         for (index, row) in searchResults.enumerated() {
@@ -110,34 +112,64 @@ struct AIController: RouteCollection {
             }
         }
         
-        // 5. 準備 OpenAI 請求
+        // 6. 檢索 B：長期語意記憶召回 (撈取歷史中最相關的提問，並自動排除短期窗口內的重複訊息)
+        let currentMsgID = newUserMsg.id ?? UUID()
+        let recentIDs = Set(recentHistory.compactMap { $0.id } + [currentMsgID])
+        let pastMemoryRows = try await sqlDB.raw("""
+                            SELECT id, role, content 
+                            FROM chat_history 
+                            WHERE user_id = \(bind: userID) 
+                              AND embedding IS NOT NULL 
+                              AND id != \(bind: currentMsgID)
+                            ORDER BY embedding <=> \(bind: vectorString)::vector 
+                            LIMIT 6
+                        """).all()
+        var longTermMemories: [String] = []
+        for row in pastMemoryRows {
+            if let id = try? row.decode(column: "id", as: UUID.self),
+               !recentIDs.contains(id),
+               let role = try? row.decode(column: "role", as: String.self),
+               let content = try? row.decode(column: "content", as: String.self) {
+                let speaker = (role == "user") ? "使用者曾提問" : "小安曾回覆"
+                longTermMemories.append("• [\(speaker)]：\(content)")
+                if longTermMemories.count >= 2 {
+                    break
+                }
+            }
+        }
+        let longTermContext = longTermMemories.joined(separator: "\n")
+        
+        // 7. 準備 OpenAI 請求
         let auth = try getOpenAIHeaders()
         let openAIURL = "https://api.openai.com/v1/chat/completions"
         
         let staticSystemPrompt = """
-            【系統最高指引：你是專屬的「帕金森氏症防手抖手套與照護 App 智慧助理（小安）」】
-            
-            核心角色與行動指引：
-            1. 語氣溫暖、具同理心，回答精簡聚焦在 200-300 字以內，善用條列方式提供易讀的摘要。
-            2. 你具備「代辦與數據統整執行能力」，能直接替使用者操作 App 寫入資料庫或查詢數據：
-               - 使用者表示「吃了藥」或「貼了貼布」➔ 呼叫 `add_medication_record`
-               - 使用者表示「想新增用藥提醒/排程」➔ 呼叫 `create_medication_plan`
-               - 使用者表示「想留言/貼便利貼/記錄心情」➔ 呼叫 `add_daily_note`
-               - 使用者表示「身體不適/手抖加劇/肢體僵硬等症狀」➔ 呼叫 `add_symptom_record`
-               - 使用者要求「產生週報/統整本週數據/回顧最近狀況」➔ 呼叫 `get_weekly_health_summary`
-               - 使用者詢問「吃了什麼藥/用藥歷史」➔ 呼叫 `get_medication_records`
-            3. 【用藥遵從度與自評週報分析原則】：
-               - 若發現使用者有「漏服排程藥物」或「服用了非排程清單上的額外藥品」，請在週報中以溫和關心的語氣進行提醒。
-               - 結合手抖震顫變化、生理指標、每日症狀自評量表、突發異常症狀與心情留言進行綜合分析。
-            4. 【防呆防幻覺嚴格守則】：
-               - 若使用者說「我剛吃藥了」但未提供「藥名」或「劑量」，【嚴禁】胡亂猜測寫入！請溫柔反問使用者服用哪種藥品與數量。
-               - 涉及醫療劑量調整建議時，一律加上安全宣告並提醒遵從專科醫師醫囑。
-            """
+                【系統最高指引：你是專屬的「帕金森氏症防手抖手套與照護 App 智慧助理（小安）」】
+                
+                核心角色與行動指引：
+                1. 語氣溫暖、具同理心，回答精簡聚焦在 200-300 字以內，善用條列方式提供易讀的摘要。
+                2. 你具備「代辦與數據統整執行能力」，能直接替使用者操作 App 寫入資料庫或查詢數據：
+                   - 使用者表示「吃了藥」或「貼了貼布」➔ 呼叫 `add_medication_record`
+                   - 使用者表示「想新增用藥提醒/排程」➔ 呼叫 `create_medication_plan`
+                   - 使用者表示「想留言/貼便利貼/記錄心情」➔ 呼叫 `add_daily_note`
+                   - 使用者表示「身體不適/手抖加劇/肢體僵硬等症狀」➔ 呼叫 `add_symptom_record`
+                   - 使用者要求「產生週報/統整本週數據/回顧最近狀況」➔ 呼叫 `get_weekly_health_summary`
+                   - 使用者詢問「吃了什麼藥/用藥歷史」➔ 呼叫 `get_medication_records`
+                3. 【用藥遵從度與自評週報分析原則】：
+                   - 若發現使用者有「漏服排程藥物」或「服用了非排程清單上的額外藥品」，請在週報中以溫和關心的語氣進行提醒。
+                   - 結合手抖震顫變化、生理指標、每日症狀自評量表、突發異常症狀與心情留言進行綜合分析。
+                4. 【防呆防幻覺嚴格守則】：
+                   - 若使用者說「我剛吃藥了」但未提供「藥名」或「劑量」，【嚴禁】胡亂猜測寫入！請溫柔反問使用者服用哪種藥品與數量。
+                   - 涉及醫療劑量調整建議時，一律加上安全宣告並提醒遵從專科醫師醫囑。
+                5. 【長期記憶善用】：
+                   - 若「過往相關歷史記憶」中檢索出使用者很久以前曾提過的話題或疑難，可視情境自然呼應（例如：「記得您之前提過...」），展現細緻的連續性關懷。
+                """
         
         var openaiMessages: [OpenAIChatRequest.Message] = [
             .init(role: "system", content: staticSystemPrompt, tool_calls: nil, tool_call_id: nil)
         ]
         
+        // 注入短期連續對話
         for chat in recentHistory {
             openaiMessages.append(.init(role: chat.role, content: chat.content, tool_calls: nil, tool_call_id: nil))
         }
@@ -147,17 +179,21 @@ struct AIController: RouteCollection {
         nowFormatter.dateFormat = "yyyy-MM-dd HH:mm (EEEE)"
         let currentTimeString = nowFormatter.string(from: Date())
         
+        // 注入包含長期語意記憶的當前 Prompt
         let dynamicUserMessage = """
-            【當前系統時間】\(currentTimeString)
-            【病患近期動態紀錄】
-            \(dynamicPatientContext)
-            ---
-            【檢索知識庫參考資料】
-            \(retrievedContext.isEmpty ? "知識庫中無直接相關資料。" : retrievedContext)
-            ---
-            【使用者本輪提問/指令】
-            \(userRequest.message)
-            """
+                【當前系統時間】\(currentTimeString)
+                【病患近期動態紀錄】
+                \(dynamicPatientContext)
+                ---
+                【過往相關歷史記憶 (長期語意召回)】
+                \(longTermContext.isEmpty ? "無特別相關之過往歷史對話。" : longTermContext)
+                ---
+                【檢索知識庫參考資料】
+                \(retrievedContext.isEmpty ? "知識庫中無直接相關資料。" : retrievedContext)
+                ---
+                【使用者本輪提問/指令】
+                \(userRequest.message)
+                """
         
         openaiMessages.append(.init(role: "user", content: dynamicUserMessage, tool_calls: nil, tool_call_id: nil))
         
