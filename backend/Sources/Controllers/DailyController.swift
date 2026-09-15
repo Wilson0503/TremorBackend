@@ -9,16 +9,13 @@ struct DailyController: RouteCollection {
         daily.delete(":recordID", use: deleteRecord)
     }
     
-    // MARK: - 🔒 核心輔助函式：動態動態判斷並獲取「目標病患 ID」
+    // MARK: - 🔒 核心輔助函式：動態獲取當前看板對應之「病患 ID」
     private func getTargetPatientID(req: Request, currentUserID: Int) async throws -> Int {
-        // 先去 user_bonds 表查看看目前登入的使用者是不是某個人的「照護者」
         if let bond = try await UserBond.query(on: req.db)
             .filter(\.$caregiverID == currentUserID)
             .first() {
-            // 如果是照護者，留言板的對象就是他綁定的被照護者（病患）
             return bond.patientID
         }
-        // 如果在綁定表找不到紀錄，代表他本身就是病患，直接返回他自己的 ID
         return currentUserID
     }
     
@@ -31,13 +28,12 @@ struct DailyController: RouteCollection {
         decoder.dateDecodingStrategy = .iso8601
         let data = try req.content.decode(DailyRequestDTO.self, using: decoder)
         
-        // 🚀 關鍵修改：動態查出這張便利貼應該歸屬在哪個病患的看板下
-        let targetPatientID = try await getTargetPatientID(req: req, currentUserID: payload.userID)
+        let isCaregiverOnly = data.isCaregiverOnly ?? false
         
-        // 檢查資料庫是否已有這張便利貼 (使用前端 SwiftData 的 UUID 字串查詢)
+        // 檢查資料庫是否已有這張便利貼
         if let existing = try await DailyRecord.find(data.id, on: req.db) {
-            // 安全防禦：確保該便利貼確實屬於目前的病患看板，防止跨帳號竄改
-            guard existing.userID == targetPatientID else {
+            // 安全防禦：僅限發布者本人修改
+            guard existing.userID == payload.userID || (existing.isCaregiverOnly && payload.userID != existing.userID) else {
                 throw Abort(.forbidden, reason: "您無權修改此便利貼")
             }
             existing.content = data.content
@@ -45,68 +41,75 @@ struct DailyController: RouteCollection {
             existing.colorHex = data.colorHex
             existing.sender = data.sender
             existing.moodName = data.moodName
-            existing.isCaregiverOnly = data.isCaregiverOnly ?? false
+            existing.isCaregiverOnly = isCaregiverOnly
             try await existing.update(on: req.db)
         } else {
-            // 沒有舊紀錄，直接建立新紀錄
+            // 🔥 核心修正：user_id 儲存真實發布者 ID (payload.userID)，不再強制寫入病患 ID
             let newRecord = DailyRecord(
                 id: data.id,
-                userID: targetPatientID, // 👈 核心：不論誰發的，一律存入病患 ID
+                userID: payload.userID, // 👈 照護者發布即為照護者 ID，病患發布即為病患 ID
                 content: data.content,
                 date: data.date,
                 colorHex: data.colorHex,
                 sender: data.sender,
                 moodName: data.moodName,
-                isCaregiverOnly: data.isCaregiverOnly ?? false
+                isCaregiverOnly: isCaregiverOnly
             )
             try await newRecord.create(on: req.db)
         }
         return .ok
     }
     
-    // MARK: - 2. 獲取當前看板的所有便利貼 (動態解析最新使用者姓名)
+    // MARK: - 2. 獲取當前看板的所有便利貼
     @Sendable
     func getAllRecords(req: Request) async throws -> Response {
         let payload = try req.auth.require(UserPayload.self)
         let targetPatientID = try await getTargetPatientID(req: req, currentUserID: payload.userID)
         
-        // 1. 先查出目前登入的使用者身分
         guard let currentUser = try await User.find(payload.userID, on: req.db) else {
             throw Abort(.unauthorized)
         }
         
-        // 2. 建立查詢 Query：病患端 (role == 0) 不能看到照護者專屬留言
-        let query = DailyRecord.query(on: req.db).filter(\.$userID == targetPatientID)
+        // 1. 取得該看板的所有成員（病患本人 + 所有連動的照護者）
+        let bonds = try await UserBond.query(on: req.db)
+            .filter(\.$patientID == targetPatientID)
+            .all()
+        let caregiverIDs = bonds.map { $0.caregiverID }
+        let boardMemberIDs = Array(Set([targetPatientID] + caregiverIDs))
+        
+        // 2. 查詢該看板下所有成員發布的便利貼
+        let query = DailyRecord.query(on: req.db)
+            .filter(\.$userID ~~ boardMemberIDs)
+        
+        // 🔥 隱私隔離：病患端 (role == 0) 嚴格隱藏「僅照護者可查看」的留言
         if currentUser.role == 0 {
             query.filter(\.$isCaregiverOnly == false)
         }
+        
         let records = try await query.sort(\.$date, .descending).all()
         
-        // 3. 預先查出看板病患本人與其綁定的照護者最新資料
-        let targetPatient = try await User.find(targetPatientID, on: req.db)
-        let bond = try await UserBond.query(on: req.db)
-            .filter(\.$patientID == targetPatientID)
-            .first()
-        let caregiverUser = (bond != nil) ? try await User.find(bond!.caregiverID, on: req.db) : nil
+        // 3. 快取所有成員資料，動態反射最新姓名
+        let boardUsers = try await User.query(on: req.db)
+            .filter(\.$id ~~ boardMemberIDs)
+            .all()
+        let userMap = Dictionary(uniqueKeysWithValues: boardUsers.compactMap { user in
+            user.id.map { ($0, user) }
+        })
         
-        // 4. 動態組合最新 sender 姓名
+        // 4. 組裝 Response DTO
         let responseDTOs = records.map { record -> DailyResponseDTO in
             let displayName: String
-            
             if record.sender == "小安助理代記" || record.sender.contains("小安") {
-                // 🤖 保留 AI 助手身分，不被使用者姓名竄改
                 displayName = record.sender
-            } else if record.isCaregiverOnly {
-                // 🛡️ 照護者專屬留言動態反映照護者最新姓名
-                displayName = caregiverUser?.name ?? record.sender
+            } else if let author = userMap[record.userID], let name = author.name, !name.isEmpty {
+                displayName = name
             } else {
-                // 👤 一般便利貼動態反映病患最新姓名，若無則 fallback 歷史文字
-                displayName = targetPatient?.name ?? record.sender
+                displayName = record.sender
             }
             
             return DailyResponseDTO(
                 id: record.id ?? "",
-                userID: record.userID,
+                userID: record.userID, // 👈 回傳真實作者 ID，App 才能精確判定刪除按鈕顯示
                 content: record.content,
                 date: record.date,
                 colorHex: record.colorHex,
@@ -126,6 +129,7 @@ struct DailyController: RouteCollection {
             body: .init(data: body)
         )
     }
+    
     // MARK: - 3. 刪除便利貼
     @Sendable
     func deleteRecord(req: Request) async throws -> HTTPStatus {
@@ -135,14 +139,21 @@ struct DailyController: RouteCollection {
             throw Abort(.badRequest, reason: "無效的紀錄 ID")
         }
         
-        let targetPatientID = try await getTargetPatientID(req: req, currentUserID: payload.userID)
+        guard let record = try await DailyRecord.find(recordID, on: req.db) else {
+            throw Abort(.notFound, reason: "找不到該筆紀錄")
+        }
         
-        // 只能刪除目前可見看板下的便利貼
-        guard let record = try await DailyRecord.query(on: req.db)
-            .filter(\.$id == recordID)
-            .filter(\.$userID == targetPatientID)
-            .first() else {
-            throw Abort(.notFound, reason: "找不到該筆紀錄或無權限刪除")
+        guard let currentUser = try await User.find(payload.userID, on: req.db) else {
+            throw Abort(.unauthorized)
+        }
+        
+        // 權限檢查：只能刪除自己發布的留言（每位使用者僅能編輯或刪除自己發布的留言）
+        // 🛡️ 防呆相容舊資料：若為舊版遺留之照護者專屬留言且當前為照護者，亦允許刪除
+        let isAuthor = (record.userID == payload.userID)
+        let isCaregiverCleaningOldRecord = (record.isCaregiverOnly && currentUser.role == 1)
+        
+        guard isAuthor || isCaregiverCleaningOldRecord else {
+            throw Abort(.forbidden, reason: "您無權刪除其他使用者發布的便利貼")
         }
         
         try await record.delete(on: req.db)
