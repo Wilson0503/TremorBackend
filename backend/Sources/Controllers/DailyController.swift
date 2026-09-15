@@ -64,30 +64,61 @@ struct DailyController: RouteCollection {
         return .ok
     }
     
-    // MARK: - 2. 獲取當前看板的所有便利貼
+    // MARK: - 2. 獲取當前看板的所有便利貼 (動態解析最新使用者姓名)
     @Sendable
     func getAllRecords(req: Request) async throws -> Response {
         let payload = try req.auth.require(UserPayload.self)
         let targetPatientID = try await getTargetPatientID(req: req, currentUserID: payload.userID)
         
-        // 🔥 先查出目前登入的使用者是病患還是照護者
+        // 1. 先查出目前登入的使用者身分
         guard let currentUser = try await User.find(payload.userID, on: req.db) else {
             throw Abort(.unauthorized)
         }
         
-        // 建立查詢 Query
+        // 2. 建立查詢 Query：病患端 (role == 0) 不能看到照護者專屬留言
         let query = DailyRecord.query(on: req.db).filter(\.$userID == targetPatientID)
-        
-        // 🔥 如果是病患 (role == 0)，他「不能」看到照護者專屬的留言
         if currentUser.role == 0 {
             query.filter(\.$isCaregiverOnly == false)
         }
-        
         let records = try await query.sort(\.$date, .descending).all()
+        
+        // 3. 預先查出看板病患本人與其綁定的照護者最新資料
+        let targetPatient = try await User.find(targetPatientID, on: req.db)
+        let bond = try await UserBond.query(on: req.db)
+            .filter(\.$patientID == targetPatientID)
+            .first()
+        let caregiverUser = (bond != nil) ? try await User.find(bond!.caregiverID, on: req.db) : nil
+        
+        // 4. 動態組合最新 sender 姓名
+        let responseDTOs = records.map { record -> DailyResponseDTO in
+            let displayName: String
+            
+            if record.sender == "小安助理代記" || record.sender.contains("小安") {
+                // 🤖 保留 AI 助手身分，不被使用者姓名竄改
+                displayName = record.sender
+            } else if record.isCaregiverOnly {
+                // 🛡️ 照護者專屬留言動態反映照護者最新姓名
+                displayName = caregiverUser?.name ?? record.sender
+            } else {
+                // 👤 一般便利貼動態反映病患最新姓名，若無則 fallback 歷史文字
+                displayName = targetPatient?.name ?? record.sender
+            }
+            
+            return DailyResponseDTO(
+                id: record.id ?? "",
+                userID: record.userID,
+                content: record.content,
+                date: record.date,
+                colorHex: record.colorHex,
+                sender: displayName,
+                moodName: record.moodName,
+                isCaregiverOnly: record.isCaregiverOnly
+            )
+        }
         
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let body = try encoder.encode(records)
+        let body = try encoder.encode(responseDTOs)
         
         return Response(
             status: .ok,
@@ -95,7 +126,6 @@ struct DailyController: RouteCollection {
             body: .init(data: body)
         )
     }
-    
     // MARK: - 3. 刪除便利貼
     @Sendable
     func deleteRecord(req: Request) async throws -> HTTPStatus {
