@@ -7,7 +7,6 @@ final class ChatHistory: Model, Content, @unchecked Sendable {
     @ID(key: .id)
     var id: UUID?
     
-    // 辨識是哪位使用者的對話 (若目前還沒有會員系統，可以先用 UUID 或字串代替)
     @Field(key: "user_id")
     var userID: String
     
@@ -16,10 +15,6 @@ final class ChatHistory: Model, Content, @unchecked Sendable {
     
     @Field(key: "content")
     var content: String
-    
-    // ✅ 正確的寫法
-    @OptionalField(key: "embedding")
-    var embedding: [Float]?
     
     // 建立時間，用來排序抓取最新對話
     @Timestamp(key: "created_at", on: .create)

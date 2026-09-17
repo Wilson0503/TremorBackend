@@ -88,15 +88,21 @@ struct AIController: RouteCollection {
         let questionVector = try await generateEmbedding(for: userRequest.message, req: req)
         let vectorString = "[" + questionVector.map { String($0) }.joined(separator: ",") + "]"
         
-        // 4. 儲存使用者本輪提問 (將向量寫入 embedding 欄位，不再呈現 NULL)
+        // 4. 儲存使用者本輪提問
         let newUserMsg = ChatHistory(userID: userID, role: "user", content: userRequest.message)
-        newUserMsg.embedding = questionVector
         try await newUserMsg.save(on: req.db)
         
         guard let sqlDB = req.db as? any SQLDatabase else {
             throw Abort(.internalServerError, reason: "資料庫連線異常，無法執行向量搜尋")
         }
         
+        let currentMsgID = newUserMsg.id ?? UUID()
+        // 🔥 以原生 SQL 更新向量欄位，直接交由 pgvector 的 ::vector 轉換，避開 Fluent 解碼衝突
+        try await sqlDB.raw("""
+                    UPDATE chat_history 
+                    SET embedding = \(bind: vectorString)::vector 
+                    WHERE id = \(bind: currentMsgID)
+                """).run()
         // 5. 檢索 A：RAG 衛教與系統知識庫 (Top 3)
         let searchResults = try await sqlDB.raw("""
                     SELECT content 
@@ -113,7 +119,6 @@ struct AIController: RouteCollection {
         }
         
         // 6. 檢索 B：長期語意記憶召回 (撈取歷史中最相關的提問，並自動排除短期窗口內的重複訊息)
-        let currentMsgID = newUserMsg.id ?? UUID()
         let recentIDs = Set(recentHistory.compactMap { $0.id } + [currentMsgID])
         let pastMemoryRows = try await sqlDB.raw("""
                             SELECT id, role, content 
