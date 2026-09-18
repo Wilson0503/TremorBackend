@@ -32,6 +32,7 @@ public func configure(_ app: Application) async throws {
     
     app.migrations.add(CreateUser())
     app.migrations.add(CreateNewTremorTables())
+    app.migrations.add(CreateTremorTrendPoints())
     app.migrations.add(CreateMedicationRecord())
     app.migrations.add(CreateDailyRecord())
     app.migrations.add(CreateUserBond())
